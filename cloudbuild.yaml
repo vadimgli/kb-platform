@@ -1,0 +1,55 @@
+steps:
+  - name: 'python:3.11-slim'
+    dir: 'backend'
+    entrypoint: 'sh'
+    args:
+      - '-c'
+      - |
+        pip install --no-cache-dir uv
+        export UV_DEFAULT_INDEX=https://pypi.org/simple
+        uv sync
+        uv run ruff check src/ tests/
+        uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=80
+        uv run python evals/run_benchmark.py
+
+  - name: 'gcr.io/cloud-builders/docker'
+    dir: 'backend'
+    args:
+      - 'build'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/kb-agent/backend:${_SHORT_SHA}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/kb-agent/backend:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/kb-agent/backend:${_SHORT_SHA}'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/kb-agent/backend:latest'
+
+  - name: 'hashicorp/terraform:1.7'
+    dir: 'infra/backend'
+    args:
+      - 'init'
+      - '-input=false'
+
+  - name: 'hashicorp/terraform:1.7'
+    dir: 'infra/backend'
+    args:
+      - 'apply'
+      - '-auto-approve'
+      - '-input=false'
+      - '-var=project_id=${PROJECT_ID}'
+      - '-var=region=${_REGION}'
+      - '-var=image_tag=${_SHORT_SHA}'
+
+substitutions:
+  _REGION: us-central1
+
+options:
+  logging: CLOUD_LOGGING_ONLY
