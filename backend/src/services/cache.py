@@ -1,10 +1,12 @@
 """SemanticPlanCache for low-latency Telemetry-Fingerprinted plan caching."""
 
+from __future__ import annotations
+
+from collections import OrderedDict
 import hashlib
 import threading
 import time
-from collections import OrderedDict
-
+from typing import Any
 from pydantic import BaseModel, Field
 
 from src.core.logging_config import get_logger
@@ -62,45 +64,25 @@ class SemanticPlanCache:
   @staticmethod
   def compute_fingerprint(
     query: str,
-    namespace: str | None = "default",
+    namespace: str | None = None,
     cluster_context: str | None = None,
     user_id: str | None = None,
   ) -> str:
-    """Computes SHA-256 fingerprint from query and cluster telemetry.
-
-    Args:
-      query: Raw user query string.
-      namespace: Kubernetes target namespace.
-      cluster_context: Optional cluster context name.
-      user_id: Operator ID for memory partitioning.
-
-    Returns:
-      SHA-256 hexadecimal digest string.
-    """
+    """Calculates deterministic SHA256 telemetry fingerprint."""
     raw_payload = (
-      f"{query.strip().lower()}::{namespace or 'default'}::"
-      f"{cluster_context or ''}::{user_id or ''}"
+      f"q:{query.strip().lower()}|ns:{namespace or ''}|"
+      f"cc:{cluster_context or ''}|u:{user_id or ''}"
     )
     return hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
 
   def get_plan(
     self,
     query: str,
-    namespace: str | None = "default",
+    namespace: str | None = None,
     cluster_context: str | None = None,
     user_id: str | None = None,
   ) -> ExecutionPlan | None:
-    """Retrieves a cached plan if present, not expired, and guardrail-safe.
-
-    Args:
-      query: Raw user query string.
-      namespace: Kubernetes target namespace.
-      cluster_context: Optional cluster context name.
-      user_id: Operator ID for memory partitioning.
-
-    Returns:
-      ExecutionPlan if cached and valid, else None.
-    """
+    """Retrieves cached plan and re-applies security guardrails."""
     fingerprint = self.compute_fingerprint(
       query=query,
       namespace=namespace,
@@ -114,46 +96,43 @@ class SemanticPlanCache:
         return None
 
       if entry.is_expired():
-        self._cache.pop(fingerprint, None)
-        logger.info(f"Evicted expired semantic cache entry: {fingerprint[:8]}")
+        logger.debug(
+          "Cache entry expired for fingerprint: %s", fingerprint[:8]
+        )
+        del self._cache[fingerprint]
         return None
 
-      # Move to end for LRU refresh
       self._cache.move_to_end(fingerprint)
       entry.metadata.hit_count += 1
-      plan = entry.plan
 
-    # MANDATORY AGENTS.md RULE 3C: Re-validate all commands via guardrails
+      cached_plan = entry.plan.model_copy(deep=True)
+
     try:
-      plan = sanitize_and_verify_commands(plan)
+      sanitized_plan = sanitize_and_verify_commands(cached_plan)
       logger.info(
-        f"Semantic cache hit (<15ms) for query '{query[:30]}...' "
-        f"fingerprint={fingerprint[:8]} (hit_count={entry.metadata.hit_count})"
+        "Semantic cache HIT for query '%s' (hits=%d)",
+        query[:30],
+        entry.metadata.hit_count,
       )
-      return plan
-    except Exception as e:  # noqa: BLE001
+      return sanitized_plan
+    except Exception as exc:  # noqa: BLE001
       logger.warning(
-        f"Cached plan failed guardrail re-validation ({e}); bypassing cache."
+        "Cached plan failed re-verification (%s); invalidating entry.", exc
       )
+      with self._lock:
+        if fingerprint in self._cache:
+          del self._cache[fingerprint]
       return None
 
   def set_plan(
     self,
-    plan: ExecutionPlan,
     query: str,
-    namespace: str | None = "default",
+    plan: ExecutionPlan,
+    namespace: str | None = None,
     cluster_context: str | None = None,
     user_id: str | None = None,
   ) -> None:
-    """Stores a validated ExecutionPlan in LRU cache.
-
-    Args:
-      plan: The Pydantic ExecutionPlan to cache.
-      query: Raw user query string.
-      namespace: Kubernetes target namespace.
-      cluster_context: Optional cluster context name.
-      user_id: Operator ID for memory partitioning.
-    """
+    """Stores plan in cache with LRU eviction policy."""
     fingerprint = self.compute_fingerprint(
       query=query,
       namespace=namespace,
@@ -174,5 +153,8 @@ class SemanticPlanCache:
       if len(self._cache) > self.maxsize:
         oldest_key, _ = self._cache.popitem(last=False)
         logger.debug(
-          f"LRU semantic cache evicted oldest entry: {oldest_key[:8]}"
+          "LRU semantic cache evicted oldest entry: %s", oldest_key[:8]
         )
+
+
+plan_cache = SemanticPlanCache()

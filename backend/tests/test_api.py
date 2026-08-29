@@ -38,7 +38,7 @@ class TestAPIGateway(unittest.TestCase):
     self.assertIn("capabilities", data)
     self.assertIn("scoping_deliverables", data["capabilities"])
 
-  @patch("src.gateway.router.rag_service.search_k8s_documentation")
+  @patch("src.gateway.router.rag_service.search_documentation")
   @patch("src.agents.planner.PlannerAgent.generate_plan")
   @patch("src.agents.executor.ExecutorAgent.generate_actions")
   def test_query_endpoint_success(self, mock_actions, mock_plan, mock_rag):
@@ -97,7 +97,7 @@ class TestAPIGateway(unittest.TestCase):
       data["deliverables"]["items"][0]["responsible_party"], "Google FDE Team"
     )
 
-  @patch("src.gateway.router.rag_service.search_k8s_documentation")
+  @patch("src.gateway.router.rag_service.search_documentation")
   @patch("src.agents.planner.PlannerAgent.generate_plan")
   @patch("src.agents.executor.ExecutorAgent.generate_actions")
   def test_query_endpoint_guardrail_violation_blocks(

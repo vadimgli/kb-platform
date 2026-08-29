@@ -60,65 +60,98 @@ class ScopingDeliverables(BaseModel):
     description="Title of the scoping document",
   )
   client_id: str = Field(
-    ...,
-    description="Target tenant client identifier",
-  )
-  items: list[ScopingDeliverableItem] = Field(
-    default_factory=list,
-    description="List of scoping deliverable items",
+    default="default_client",
+    description="Client tenant ID for vault sandboxing",
   )
   timeline_weeks: int = Field(
     default=6,
-    description="Total project duration in weeks",
+    description="Engagement timeline duration in weeks",
   )
+  items: list[ScopingDeliverableItem] = Field(
+    default_factory=list,
+    description="List of scope areas and deliverables",
+  )
+  rows: list[ScopingDeliverableItem] | None = None
 
-  def __init__(self, **data: Any):
-    if "rows" in data and "items" not in data:
-      data["items"] = data.pop("rows")
-    super().__init__(**data)
-
-  @property
-  def rows(self) -> list[ScopingDeliverableItem]:
-    """Backward compatibility alias for items."""
-    return self.items
+  def model_post_init(self, __context: Any) -> None:
+    """Synchronizes items and legacy rows alias."""
+    if self.rows and not self.items:
+      self.items = list(self.rows)
+    elif self.items and self.rows is None:
+      self.rows = list(self.items)
 
 
-# Aliases for backward compatibility
-ResponsibilityMatrixItem = ScopingDeliverableItem
+# Backward compatibility aliases
 InScopeResponsibilitiesMatrix = ScopingDeliverables
+InScopeMatrixItem = ScopingDeliverableItem
+ResponsibilityMatrixItem = ScopingDeliverableItem
 
 
 class AgentAction(BaseModel):
-  """Deterministic execution step synthesized by ExecutorAgent."""
+  """Deterministic structured command action synthesized by executor."""
 
-  action_type: ActionCategory
-  target_tenant_id: str
-  payload: str
-  description: str
-  risk_level: RiskLevel = RiskLevel.LOW
-  status: str = "PENDING"
+  action_type: ActionCategory = Field(
+    ...,
+    description="Standardized action classification category",
+  )
+  target_tenant_id: str = Field(
+    ...,
+    description="Mandatory client tenant identifier for boundary checks",
+  )
+  payload: str = Field(
+    ...,
+    description="Payload or instruction text for tool execution",
+  )
+  description: str = Field(
+    ...,
+    description="Human-readable summary of this execution step",
+  )
+  risk_level: RiskLevel = Field(
+    default=RiskLevel.LOW,
+    description="Evaluated risk level classification",
+  )
+  status: str = Field(
+    default="PENDING",
+    description="Current execution lifecycle status",
+  )
 
 
 class ExecutionPlan(BaseModel):
-  """Structured execution plan emitted by PlannerAgent."""
+  """Structured execution plan synthesized by planner."""
 
   summary: str = Field(
     ...,
-    description="Executive summary of the synthesized scoping deliverables",
+    description="Executive summary of the scoping deliverables",
   )
-  target_tenant_id: str
-  artifact_type: ArtifactType | str | None = None
-  deliverables: ScopingDeliverables | None = None
-  actions: list[AgentAction] = Field(default_factory=list)
-  citations: list[str] = Field(default_factory=list)
+  target_tenant_id: str = Field(
+    ...,
+    description="Target tenant client ID",
+  )
+  deliverables: ScopingDeliverables | None = Field(
+    default=None,
+    description="Structured 3-column in-scope responsibilities matrix",
+  )
+  matrix: ScopingDeliverables | None = None
+  actions: list[AgentAction] = Field(
+    default_factory=list,
+    description="Ordered sequence of verified actions",
+  )
+  citations: list[str] = Field(
+    default_factory=list,
+    description="Citations and grounding URLs",
+  )
+  prompt_tokens: int | None = 0
+  completion_tokens: int | None = 0
 
-  @property
-  def matrix(self) -> ScopingDeliverables | None:
-    """Alias for deliverables matrix."""
-    return self.deliverables
+  def model_post_init(self, __context: Any) -> None:
+    """Synchronizes deliverables and legacy matrix alias."""
+    if self.matrix and not self.deliverables:
+      self.deliverables = self.matrix
+    elif self.deliverables and self.matrix is None:
+      self.matrix = self.deliverables
 
 
-TroubleshootingPlan = ExecutionPlan
+# --- Single-Shot Query API Payloads ---
 
 
 class AgentQueryRequest(BaseModel):
@@ -141,6 +174,11 @@ class AgentQueryRequest(BaseModel):
     description="Unique conversational session identifier",
   )
   image_data: bytes | None = None
+
+
+# Backward compatibility aliases
+PlanQueryRequest = AgentQueryRequest
+QueryRequest = AgentQueryRequest
 
 
 # --- Conversational Multi-Turn Tier 1 Data Contracts ---

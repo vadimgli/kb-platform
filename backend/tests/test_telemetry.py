@@ -41,11 +41,11 @@ def test_record_span_attributes_schema() -> None:
     call.args[0]: call.args[1]
     for call in mock_span.set_attribute.call_args_list
   }
-  assert calls["k8s_copilot.query.session_id"] == "session-eval-123"
-  assert calls["k8s_copilot.planner.vais_hit_count"] == 3
-  assert calls["k8s_copilot.executor.step_count"] == 4
-  assert calls["k8s_copilot.guardrail.high_risk_count"] == 1
-  assert calls["k8s_copilot.guardrail.overridden"] is True
+  assert calls["artifactforge.query.session_id"] == "session-eval-123"
+  assert calls["artifactforge.planner.vais_hit_count"] == 3
+  assert calls["artifactforge.executor.step_count"] == 4
+  assert calls["artifactforge.guardrail.high_risk_count"] == 1
+  assert calls["artifactforge.guardrail.overridden"] is True
   assert calls["gen_ai.usage.prompt_tokens"] == 450
   assert calls["gen_ai.usage.completion_tokens"] == 180
   assert calls["gen_ai.usage.total_tokens"] == 630
@@ -58,7 +58,7 @@ def test_record_query_metrics_offline_fallback() -> None:
 
   service.record_query_metrics(
     session_id="session-offline-001",
-    query="Pod crashing exit 137",
+    query="Draft scoping deliverables matrix",
     latency_ms=1250,
     prompt_tokens=500,
     completion_tokens=250,
@@ -74,7 +74,7 @@ def test_log_vertex_experiment_run_offline() -> None:
   service.project_id = "dummy-gcp-project"
 
   service.log_vertex_experiment_run(
-    experiment_name="k8s-copilot-evals",
+    experiment_name="artifactforge-evals",
     run_name="run-offline-test",
     params={"planner_model": "gemini-2.5-flash"},
     metrics={"average_score": 3.0},
@@ -89,7 +89,7 @@ def test_log_vertex_experiment_run_active(monkeypatch: Any) -> None:
   service = TelemetryService()
   service.project_id = "real-project-id"
   service.log_vertex_experiment_run(
-    experiment_name="k8s-copilot-evals",
+    experiment_name="artifactforge-evals",
     run_name="run-active-test",
     params={"planner_model": "gemini-2.5-flash"},
     metrics={"average_score": 3.0},
@@ -111,7 +111,7 @@ def test_log_vertex_experiment_run_exception_fallback(
   service = TelemetryService()
   service.project_id = "real-project-id"
   service.log_vertex_experiment_run(
-    experiment_name="k8s-copilot-evals",
+    experiment_name="artifactforge-evals",
     run_name="run-error-test",
     params={"planner_model": "gemini-2.5-flash"},
     metrics={"average_score": 3.0},
@@ -129,7 +129,7 @@ def test_record_query_metrics_bigquery_schema_integrity() -> None:
   row = {
     "timestamp": "2026-08-04T03:00:00+00:00",
     "session_id": "session-bq-eval-001",
-    "query": "Deployment crashing",
+    "query": "Scoping deliverables query",
     "latency_ms": 1100,
     "prompt_tokens": 400,
     "completion_tokens": 200,

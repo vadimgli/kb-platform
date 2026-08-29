@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -45,7 +46,7 @@ agent_registry.register_agent(
 )
 
 # 2. Mount Enterprise Agent Gateway
-app.include_router(gateway_router)
+app.include_router(gateway_router, prefix="/api/v1")
 
 # 3. Mount A2A Agent Card & Protocol Endpoints
 a2a_router = create_a2a_router(

@@ -31,7 +31,7 @@ class ResearchAgentTool:
 
     # 1. Query Vertex AI Search RAG
     try:
-      rag_snippets = self.rag_service.search_k8s_documentation(
+      rag_snippets = self.rag_service.search_documentation(
         query=query, page_size=3
       )
       for s in rag_snippets:

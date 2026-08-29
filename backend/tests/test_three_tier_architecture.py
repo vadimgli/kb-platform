@@ -60,7 +60,7 @@ class TestThreeTierArchitecture(unittest.IsolatedAsyncioTestCase):
   async def test_tier3_research_tool_bounds_context(self):
     """Verifies ResearchAgentTool aggregates grounding without context bleed."""
     mock_rag = MagicMock(spec=VertexRAGService)
-    mock_rag.search_k8s_documentation.return_value = [
+    mock_rag.search_documentation.return_value = [
       {"snippet": "Grounded ML evals and monitoring context."}
     ]
     tool = ResearchAgentTool(rag_service=mock_rag)
@@ -119,7 +119,7 @@ class TestThreeTierArchitecture(unittest.IsolatedAsyncioTestCase):
       return_value=_get_mock_plan("client_d")
     )
     mock_rag = MagicMock(spec=VertexRAGService)
-    mock_rag.search_k8s_documentation.return_value = [
+    mock_rag.search_documentation.return_value = [
       {"snippet": "Grounded context"}
     ]
     research_tool = ResearchAgentTool(rag_service=mock_rag)
@@ -152,7 +152,7 @@ class TestThreeTierArchitecture(unittest.IsolatedAsyncioTestCase):
       return_value=_get_mock_plan("client_d")
     )
     mock_rag = MagicMock(spec=VertexRAGService)
-    mock_rag.search_k8s_documentation.return_value = [
+    mock_rag.search_documentation.return_value = [
       {"snippet": "Grounded context"}
     ]
     research_tool = ResearchAgentTool(rag_service=mock_rag)
@@ -191,7 +191,7 @@ class TestThreeTierArchitecture(unittest.IsolatedAsyncioTestCase):
       return_value=_get_mock_plan("client_d")
     )
     mock_rag = MagicMock(spec=VertexRAGService)
-    mock_rag.search_k8s_documentation.return_value = [
+    mock_rag.search_documentation.return_value = [
       {"snippet": "Grounded context"}
     ]
     research_tool = ResearchAgentTool(rag_service=mock_rag)

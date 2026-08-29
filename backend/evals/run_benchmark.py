@@ -88,8 +88,8 @@ def run_benchmark_report() -> dict[str, Any]:
     }.get(score, str(score))
 
     anchor_name = (
-      scenario.get("domain_anchor")
-      or scenario.get("k8s_error_anchor")
+      scenario.get("deliverable_anchor")
+      or scenario.get("domain_anchor")
       or "general"
     )
     msg = (
@@ -113,26 +113,16 @@ def run_benchmark_report() -> dict[str, Any]:
     )
 
   num_scenarios = len(scenarios)
-  avg_score = round(total_score / num_scenarios, 2) if num_scenarios > 0 else 0
-  exemplary_count = sum(1 for r in results if r["score"] == 3)
-  pass_rate = (
-    round((exemplary_count / num_scenarios) * 100, 1)
-    if num_scenarios > 0
-    else 0
-  )
+  avg_score = total_score / num_scenarios if num_scenarios > 0 else 0.0
 
-  report = {
+  return {
     "total_scenarios": num_scenarios,
-    "average_score": avg_score,
-    "pass_rate_percentage": pass_rate,
-    "exemplary_count": exemplary_count,
-    "results": results,
+    "average_rubric_score": round(avg_score, 2),
+    "scenario_results": results,
   }
-
-  logger.info("BENCHMARK COMPLETED: Avg Score: %s/3.0", avg_score)
-  return report
 
 
 if __name__ == "__main__":
   logging.basicConfig(level=logging.INFO)
-  run_benchmark_report()
+  report = run_benchmark_report()
+  print(json.dumps(report, indent=2))

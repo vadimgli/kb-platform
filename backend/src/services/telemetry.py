@@ -110,12 +110,6 @@ class TelemetryService:
       "artifactforge.guardrail.high_risk_count", high_risk_count
     )
     span.set_attribute("artifactforge.guardrail.overridden", overridden)
-    # Backward-compatible attributes
-    span.set_attribute("k8s_copilot.query.session_id", session_id)
-    span.set_attribute("k8s_copilot.planner.vais_hit_count", vais_hit_count)
-    span.set_attribute("k8s_copilot.executor.step_count", step_count)
-    span.set_attribute("k8s_copilot.guardrail.high_risk_count", high_risk_count)
-    span.set_attribute("k8s_copilot.guardrail.overridden", overridden)
     span.set_attribute("gen_ai.usage.prompt_tokens", prompt_tokens)
     span.set_attribute("gen_ai.usage.completion_tokens", completion_tokens)
     span.set_attribute(

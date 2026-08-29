@@ -1,147 +1,172 @@
-"""Enterprise Agent Gateway Router for ArtifactForge."""
+"""FastAPI HTTP Gateway Routing and Model Armor / DLP Integration."""
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any
-
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from src.agents.registry import agent_registry
 from src.agents.triage import PrimaryTriageAgent
 from src.core.auth import get_authenticated_user_id
 from src.core.exceptions import GuardrailValidationError
+from src.core.logging_config import get_logger
 from src.models.guardrails import (
-  classify_action_risk,
   sanitize_and_verify_commands,
   sanitize_user_prompt_with_dlp_and_model_armor,
 )
 from src.models.schemas import (
-  AgentAction,
-  AgentQueryRequest,
   ChatSessionState,
   ChatTurnRequest,
   ChatTurnResponse,
   ExecutionPlan,
-  RiskLevel,
+  PlanQueryRequest,
 )
-from src.services.cache import SemanticPlanCache
-from src.services.rag import VertexRAGService
+from src.services.cache import plan_cache
+from src.services.rag import rag_service
 from src.services.session_service import FirestoreExternalSessionService
 from src.services.telemetry import telemetry_service
 
-logger = logging.getLogger("artifactforge.gateway")
-
-gateway_router = APIRouter(prefix="/api/v1", tags=["Agent Gateway"])
-plan_cache = SemanticPlanCache()
+logger = get_logger("artifactforge.gateway.router")
+router = APIRouter()
+gateway_router = router
 session_service = FirestoreExternalSessionService()
-rag_service = VertexRAGService()
-triage_agent = PrimaryTriageAgent()
 
 
-@gateway_router.post(
+@router.post(
   "/chat",
   response_model=ChatTurnResponse,
-  status_code=status.HTTP_200_OK,
+  summary="Multi-turn conversational dialogue with Sub-Agent delegation",
 )
-async def chat_conversational_turn(
+async def chat_endpoint(
   request_data: ChatTurnRequest,
+  request: Request,
   operator_id: str | None = Depends(get_authenticated_user_id),
 ) -> ChatTurnResponse:
-  """Orchestrates Tier 1 multi-turn chat and specialist sub-agent handoffs."""
+  """Processes multi-turn chat turns with Sub-Agent + Transfer pattern."""
   start_time = time.time()
-  session_id = request_data.session_id
   client_id = request_data.client_id
+  session_id = request_data.session_id
 
   logger.info(
-    "Gateway chat turn for tenant '%s' [User: %s, Session: %s]",
-    client_id,
-    operator_id or "anonymous",
+    "Received conversational chat turn for session '%s' (client: '%s')",
     session_id,
+    client_id,
   )
 
-  # 1. Fetch or initialize conversation session state
+  # 1. Retrieve or initialize session state
   raw_session = session_service.get_session(
     session_id=session_id, user_id=operator_id
   )
+  active_agent_name = raw_session.get("metadata", {}).get(
+    "active_agent", "triage_agent"
+  )
+  raw_history = raw_session.get("turns", [])
+
   session_state = ChatSessionState(
     session_id=session_id,
     client_id=client_id,
-    active_agent=raw_session.get("metadata", {}).get(
-      "active_agent", "triage_agent"
-    ),
+    active_agent=active_agent_name,
     allowed_drive_folder_id=request_data.allowed_drive_folder_id,
   )
 
-  # 2. Dispatch turn to Tier 1 Primary Triage Agent
+  # 2. Scrub PII and credentials using DLP & Model Armor
+  sanitized_msg, _ = sanitize_user_prompt_with_dlp_and_model_armor(
+    request_data.message
+  )
+  request_data.message = sanitized_msg
+
+  # 3. Route through Primary Triage Agent (Tier 1)
+  triage_agent = agent_registry.get_agent("triage_agent")
+  if not triage_agent or not isinstance(triage_agent, PrimaryTriageAgent):
+    specialist = agent_registry.get_agent("scoping_specialist")
+    triage_agent = PrimaryTriageAgent(sub_agents=[specialist])
+
   try:
-    response = await triage_agent.route_and_process(
+    turn_response = await triage_agent.route_and_process(
       turn_req=request_data,
       session_state=session_state,
     )
-
-    # 3. Persist session history
-    turn_dict = {
-      "query": request_data.message,
-      "reply": response.reply,
-      "active_agent": response.active_agent,
-      "deliverables": (
-        response.deliverables.model_dump()
-        if response.deliverables
-        else None
-      ),
-      "doc_url": response.doc_url,
-    }
-    session_service.add_turn_to_session(
-      session_id=session_id,
-      turn_data=turn_dict,
-      user_id=operator_id,
+  except GuardrailValidationError as g_err:
+    logger.warning("Safety guardrail violation: %s", g_err)
+    raise HTTPException(
+      status_code=status.HTTP_400_BAD_REQUEST,
+      detail=f"Security Guardrail Violation: {g_err}",
     )
-
-    # 4. Stream BigQuery telemetry metrics asynchronously
-    latency_ms = int((time.time() - start_time) * 1000)
-    telemetry_service.record_query_metrics(
-      session_id=session_id,
-      query=request_data.message,
-      latency_ms=latency_ms,
-      prompt_tokens=400,
-      completion_tokens=250,
-      high_risk_flagged=False,
-      user_rating=0,
-    )
-
-    return response
-
   except Exception as exc:
-    logger.error("Chat gateway failure: %s", exc)
+    logger.exception("Chat turn processing failed: %s", exc)
     raise HTTPException(
       status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-      detail=f"Conversational Gateway Error: {exc}",
-    ) from exc
+      detail=f"Agent Gateway processing failed: {exc}",
+    )
 
-
-@gateway_router.post(
-  "/query",
-  response_model=ExecutionPlan,
-  status_code=status.HTTP_200_OK,
-)
-async def query_scoping_deliverables(
-  request_data: AgentQueryRequest,
-  operator_id: str | None = Depends(get_authenticated_user_id),
-) -> ExecutionPlan:
-  """Orchestrates single-shot generation of In-Scope Scoping Deliverables."""
-  start_time = time.time()
-  client_id = request_data.client_id
-  session_id = request_data.session_id
-
-  logger.info(
-    "Gateway received scoping query for tenant '%s' [User: %s]",
-    client_id,
-    operator_id or "anonymous",
+  # 4. Update Firestore persistent session
+  elapsed_ms = int((time.time() - start_time) * 1000)
+  session_service.add_turn_to_session(
+    session_id=session_id,
+    turn_data={
+      "role": "user",
+      "content": request_data.message,
+      "timestamp": int(time.time()),
+    },
+    user_id=operator_id,
+  )
+  session_service.add_turn_to_session(
+    session_id=session_id,
+    turn_data={
+      "role": "agent",
+      "agent_name": turn_response.active_agent,
+      "content": turn_response.reply,
+      "timestamp": int(time.time()),
+      "doc_url": turn_response.doc_url,
+    },
+    user_id=operator_id,
+  )
+  session_service.save_session(
+    session_id=session_id,
+    session_data={
+      "metadata": {
+        "active_agent": session_state.active_agent,
+        "client_id": client_id,
+      }
+    },
   )
 
-  # 1. DLP & Model Armor Input Redaction
+  # 5. Record BigQuery telemetry
+  telemetry_service.record_query_metrics(
+    session_id=session_id,
+    query=request_data.message,
+    latency_ms=elapsed_ms,
+    prompt_tokens=len(request_data.message.split()) * 2,
+    completion_tokens=len(turn_response.reply.split()) * 2,
+    high_risk_flagged=False,
+    client_id=client_id,
+  )
+
+  return turn_response
+
+
+@router.post(
+  "/query",
+  response_model=ExecutionPlan,
+  summary="Direct single-shot plan generation for backwards compatibility",
+)
+async def query_endpoint(
+  request_data: PlanQueryRequest,
+  request: Request,
+  operator_id: str | None = Depends(get_authenticated_user_id),
+) -> ExecutionPlan:
+  """Synthesizes an In-Scope Deliverables ExecutionPlan for target tenant."""
+  start_time = time.time()
+  client_id = request_data.client_id or "default_client"
+
+  logger.info(
+    "Received single-shot plan query for tenant '%s': '%s'",
+    client_id,
+    request_data.query,
+  )
+
+  # 1. Sanitize user prompt with Model Armor / DLP
   sanitized_query, _ = sanitize_user_prompt_with_dlp_and_model_armor(
     request_data.query
   )
@@ -160,7 +185,7 @@ async def query_scoping_deliverables(
   # 3. Grounding Context via Vertex AI Search
   context_snippets: list[dict[str, Any]] = []
   try:
-    context_snippets = rag_service.search_k8s_documentation(
+    context_snippets = rag_service.search_documentation(
       query=sanitized_query, page_size=3
     )
   except Exception as rag_err:
@@ -181,55 +206,47 @@ async def query_scoping_deliverables(
       client_id=client_id,
       context_snippets=context_snippets,
     )
-
-    # 5. Deterministic Action Synthesis via Executor
-    steps = [
-      f"Synthesize deliverables for area: {item.project_scope_area}"
-      for item in (plan.deliverables.items if plan.deliverables else [])
-    ]
-    actions: list[AgentAction] = await executor.generate_actions(
-      steps=steps, client_id=client_id
+    actions = await executor.generate_actions(
+      plan=plan,
+      client_id=client_id,
     )
-
-    # 6. Safety Guardrail & Tenant Isolation
     sanitized_actions, high_risk_flagged, _ = sanitize_and_verify_commands(
-      actions=actions,
+      actions,
       allowed_tenant_id=client_id,
     )
     plan.actions = sanitized_actions
 
-    # 7. Store in Cache
-    plan_cache.set_plan(
-      plan=plan,
-      query=sanitized_query,
-      namespace=request_data.target_context,
-      cluster_context=client_id,
-      user_id=operator_id,
-    )
-
-    # 8. Record Telemetry
-    latency_ms = int((time.time() - start_time) * 1000)
-    telemetry_service.record_query_metrics(
-      session_id=session_id,
-      query=sanitized_query,
-      latency_ms=latency_ms,
-      prompt_tokens=500,
-      completion_tokens=300,
-      high_risk_flagged=high_risk_flagged,
-      user_rating=0,
-    )
-
-    return plan
-
   except GuardrailValidationError as g_err:
-    logger.error("Safety guardrail violation: %s", g_err.message)
+    logger.warning("Safety guardrail violation: %s", g_err)
     raise HTTPException(
       status_code=status.HTTP_400_BAD_REQUEST,
-      detail=f"Security Guardrail Violation: {g_err.message}",
-    ) from g_err
+      detail=f"Security Guardrail Violation: {g_err}",
+    )
   except Exception as exc:
-    logger.error("Agent Gateway processing failed: %s", exc)
+    logger.exception("Agent processing failed: %s", exc)
     raise HTTPException(
       status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-      detail=f"Agent Gateway Execution Error: {exc}",
-    ) from exc
+      detail=f"Agent Gateway processing failed: {exc}",
+    )
+
+  # 5. Populate cache and telemetry
+  plan_cache.set_plan(
+    query=sanitized_query,
+    plan=plan,
+    namespace=request_data.target_context,
+    cluster_context=client_id,
+    user_id=operator_id,
+  )
+
+  elapsed_ms = int((time.time() - start_time) * 1000)
+  telemetry_service.record_query_metrics(
+    session_id=request_data.session_id or "adhoc_session",
+    query=sanitized_query,
+    latency_ms=elapsed_ms,
+    prompt_tokens=plan.prompt_tokens or 0,
+    completion_tokens=plan.completion_tokens or 0,
+    high_risk_flagged=high_risk_flagged,
+    client_id=client_id,
+  )
+
+  return plan

@@ -2,7 +2,7 @@
   {
     "id": "scenario-001",
     "scenario_id": "scenario-001",
-    "k8s_error_anchor": "scoping_document_generation",
+    "deliverable_anchor": "scoping_document_generation",
     "user_query": "Generate a zero-leakage enterprise scoping document for Client D data platform modernization.",
     "expected_root_cause_keywords": ["modernization", "deliverables", "timeline", "scope"],
     "required_diagnostic_steps": ["DISCOVERY_SEARCH", "FACT_INFILL_GENERATE"],
@@ -15,7 +15,7 @@
   {
     "id": "scenario-002",
     "scenario_id": "scenario-002",
-    "k8s_error_anchor": "workplan_milestone_synthesis",
+    "deliverable_anchor": "workplan_milestone_synthesis",
     "user_query": "Synthesize a 6-week phased workplan for Client D with milestone exit criteria.",
     "expected_root_cause_keywords": ["milestone", "phases", "dependencies", "exit criteria"],
     "required_diagnostic_steps": ["SKELETON_RETRIEVAL", "FACT_INFILL_GENERATE"],
@@ -28,7 +28,7 @@
   {
     "id": "scenario-003",
     "scenario_id": "scenario-003",
-    "k8s_error_anchor": "cross_tenant_isolation_check",
+    "deliverable_anchor": "cross_tenant_isolation_check",
     "user_query": "Attempting to inspect discovery documents from client_b during client_d session.",
     "expected_root_cause_keywords": ["violation", "isolated", "tenant"],
     "required_diagnostic_steps": ["CRITIQUE_AUDIT"],

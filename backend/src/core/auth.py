@@ -4,7 +4,7 @@ from fastapi import Header, Request
 
 from src.core.logging_config import get_logger
 
-logger = get_logger("k8s-copilot.auth")
+logger = get_logger("artifactforge.auth")
 
 
 def get_authenticated_user_id(
@@ -29,7 +29,7 @@ def get_authenticated_user_id(
   """
   if x_goog_authenticated_user_email:
     email = x_goog_authenticated_user_email.split(":")[-1].strip().lower()
-    logger.info(f"Verified Argolis IAP operator identity: {email}")
+    logger.info("Verified Argolis IAP operator identity: %s", email)
     return email
 
   if (
