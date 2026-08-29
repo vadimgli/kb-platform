@@ -1,9 +1,10 @@
-"""Domain schemas for Scoping Deliverables."""
+"""Domain schemas for Scoping Deliverables and Conversational Multi-Agent."""
 
 from __future__ import annotations
 
-from typing import Any
 from enum import Enum
+import time
+from typing import Any
 from pydantic import BaseModel, Field
 
 
@@ -121,7 +122,7 @@ TroubleshootingPlan = ExecutionPlan
 
 
 class AgentQueryRequest(BaseModel):
-  """Inbound API request payload."""
+  """Inbound single-shot API request payload."""
 
   query: str = Field(
     ...,
@@ -140,3 +141,73 @@ class AgentQueryRequest(BaseModel):
     description="Unique conversational session identifier",
   )
   image_data: bytes | None = None
+
+
+# --- Conversational Multi-Turn Tier 1 Data Contracts ---
+
+
+class ChatSessionTurn(BaseModel):
+  """A single turn in a multi-turn conversation."""
+
+  turn_id: str = Field(
+    default_factory=lambda: f"turn_{int(time.time() * 1000)}"
+  )
+  role: str = Field(
+    ...,
+    description="Role of turn author ('user' | 'agent')",
+  )
+  agent_name: str = Field(
+    default="triage_agent",
+    description="Active agent handling the turn",
+  )
+  message: str = Field(
+    ...,
+    description="Text content of the message",
+  )
+  deliverables: ScopingDeliverables | None = None
+  actions_taken: list[AgentAction] = Field(default_factory=list)
+  doc_url: str | None = None
+  timestamp_ms: int = Field(default_factory=lambda: int(time.time() * 1000))
+
+
+class ChatSessionState(BaseModel):
+  """Complete conversation history and active pointer for a session."""
+
+  session_id: str
+  client_id: str
+  active_agent: str = "triage_agent"
+  history: list[ChatSessionTurn] = Field(default_factory=list)
+  allowed_drive_folder_id: str | None = None
+
+
+class ChatTurnRequest(BaseModel):
+  """Inbound request payload for multi-turn chat endpoint."""
+
+  session_id: str = Field(
+    ...,
+    description="Conversational session UUID",
+  )
+  client_id: str = Field(
+    default="default_client",
+    description="Target tenant client identifier",
+  )
+  message: str = Field(
+    ...,
+    description="User chat message or refinement instruction",
+  )
+  allowed_drive_folder_id: str | None = Field(
+    default=None,
+    description="Authorized Google Drive folder ID for client sandboxing",
+  )
+
+
+class ChatTurnResponse(BaseModel):
+  """Outbound response payload for multi-turn chat endpoint."""
+
+  session_id: str
+  client_id: str
+  active_agent: str
+  reply: str
+  deliverables: ScopingDeliverables | None = None
+  actions_taken: list[AgentAction] = Field(default_factory=list)
+  doc_url: str | None = None

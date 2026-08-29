@@ -1,7 +1,7 @@
 """Unit and integration tests for FastAPI gateway endpoints."""
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 
 from src.main import app
@@ -38,10 +38,12 @@ class TestAPIGateway(unittest.TestCase):
     self.assertIn("capabilities", data)
     self.assertIn("scoping_deliverables", data["capabilities"])
 
+  @patch("src.gateway.router.rag_service.search_k8s_documentation")
   @patch("src.agents.planner.PlannerAgent.generate_plan")
   @patch("src.agents.executor.ExecutorAgent.generate_actions")
-  def test_query_endpoint_success(self, mock_actions, mock_plan):
+  def test_query_endpoint_success(self, mock_actions, mock_plan, mock_rag):
     """Tests POST /api/v1/query returns valid ExecutionPlan."""
+    mock_rag.return_value = [{"snippet": "Mock grounding context"}]
     mock_plan.return_value = ExecutionPlan(
       summary="Test Scoping Deliverables for Client D",
       target_tenant_id="client_d",
@@ -51,7 +53,9 @@ class TestAPIGateway(unittest.TestCase):
         items=[
           ScopingDeliverableItem(
             project_scope_area="Model Evals Setup",
-            technical_deliverables=["Evaluation report across Gemini versions"],
+            technical_deliverables=[
+              "Evaluation report across Gemini versions"
+            ],
             responsible_party="Google FDE Team",
           )
         ],
@@ -93,9 +97,14 @@ class TestAPIGateway(unittest.TestCase):
       data["deliverables"]["items"][0]["responsible_party"], "Google FDE Team"
     )
 
+  @patch("src.gateway.router.rag_service.search_k8s_documentation")
   @patch("src.agents.planner.PlannerAgent.generate_plan")
-  def test_query_endpoint_guardrail_violation_blocks(self, mock_plan):
-    """Tests that cross-tenant access in plan is blocked by safety guardrail."""
+  @patch("src.agents.executor.ExecutorAgent.generate_actions")
+  def test_query_endpoint_guardrail_violation_blocks(
+    self, mock_actions, mock_plan, mock_rag
+  ):
+    """Tests that cross-tenant access is blocked by safety guardrail."""
+    mock_rag.return_value = [{"snippet": "Mock grounding context"}]
     mock_plan.return_value = ExecutionPlan(
       summary="Malicious cross-tenant plan",
       target_tenant_id="client_d",
@@ -109,6 +118,15 @@ class TestAPIGateway(unittest.TestCase):
         )
       ],
     )
+    mock_actions.return_value = [
+      AgentAction(
+        action_type=ActionCategory.DISCOVERY_SEARCH,
+        target_tenant_id="client_b",
+        payload="Read client_b vault",
+        description="Cross tenant read",
+        risk_level=RiskLevel.LOW,
+      )
+    ]
 
     payload = {
       "query": "Read another client data",

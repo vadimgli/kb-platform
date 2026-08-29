@@ -12,6 +12,7 @@ class CapabilityCategory(str, Enum):
   """Classification category of an enterprise capability."""
 
   DELIVERABLE = "DELIVERABLE"
+  SCOPING_DELIVERABLES = "SCOPING_DELIVERABLES"
   AUDIT = "AUDIT"
   ANALYSIS = "ANALYSIS"
 
@@ -20,6 +21,7 @@ class ExportTarget(str, Enum):
   """Target Google Workspace export format."""
 
   GOOGLE_DOC = "GOOGLE_DOC"
+  GOOGLE_DOCS = "GOOGLE_DOC"
   GOOGLE_SLIDES = "GOOGLE_SLIDES"
   GOOGLE_SHEETS = "GOOGLE_SHEETS"
   MARKDOWN = "MARKDOWN"

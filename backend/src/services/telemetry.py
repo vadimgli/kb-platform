@@ -64,23 +64,30 @@ class TelemetryService:
       ):
         exporter = CloudTraceSpanExporter(project_id=self.project_id)
         provider.add_span_processor(BatchSpanProcessor(exporter))
-        logger.info("Configured Google Cloud Trace Span Exporter.")
+        logger.info(
+          "Configured OpenTelemetry with CloudTraceSpanExporter for %s",
+          self.project_id,
+        )
       else:
         provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+        logger.info("Configured OpenTelemetry with ConsoleSpanExporter.")
     except Exception as exc:  # noqa: BLE001
-      logger.debug("Cloud Trace export fallback note: %s", exc)
+      logger.warning("Trace exporter setup warning: %s; using Console.", exc)
       provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
 
     trace.set_tracer_provider(provider)
-    self._tracer = trace.get_tracer("artifactforge", "1.0.0")
+    self._tracer = trace.get_tracer("artifactforge.gateway")
+
+  @property
+  def tracer(self) -> Any:
+    """Returns initialized OTEL Tracer instance."""
+    if self._tracer is None and trace is not None:
+      self._tracer = trace.get_tracer("artifactforge.gateway")
+    return self._tracer
 
   def get_tracer(self) -> Any:
-    """Returns the configured OpenTelemetry tracer or no-op tracer."""
-    if self._tracer is not None:
-      return self._tracer
-    if trace is not None:
-      return trace.get_tracer("artifactforge-noop")
-    return None
+    """Returns initialized OTEL Tracer instance."""
+    return self.tracer
 
   def record_span_attributes(
     self,
@@ -96,6 +103,14 @@ class TelemetryService:
     """Attaches standardized evaluation and observability attributes to span."""
     if not span:
       return
+    span.set_attribute("artifactforge.query.session_id", session_id)
+    span.set_attribute("artifactforge.planner.vais_hit_count", vais_hit_count)
+    span.set_attribute("artifactforge.executor.step_count", step_count)
+    span.set_attribute(
+      "artifactforge.guardrail.high_risk_count", high_risk_count
+    )
+    span.set_attribute("artifactforge.guardrail.overridden", overridden)
+    # Backward-compatible attributes
     span.set_attribute("k8s_copilot.query.session_id", session_id)
     span.set_attribute("k8s_copilot.planner.vais_hit_count", vais_hit_count)
     span.set_attribute("k8s_copilot.executor.step_count", step_count)
@@ -160,13 +175,12 @@ class TelemetryService:
     rag_latency_ms: int = 0,
     planner_latency_ms: int = 0,
     executor_latency_ms: int = 0,
-    execution_mode: str = "async",
-    experiment_variant: str = "control",
+    model_version: str = "gemini-2.5-flash",
+    prompt_template_version: str = "v1.0",
+    client_id: str = "",
   ) -> None:
-    """Records end-to-end telemetry metrics to BigQuery query_metrics table."""
-    if estimated_cost_usd <= 0.0 and (
-      prompt_tokens > 0 or completion_tokens > 0
-    ):
+    """Non-blocking background export of query telemetry to BigQuery."""
+    if estimated_cost_usd <= 0.0:
       estimated_cost_usd = self.calculate_query_cost_usd(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
@@ -174,32 +188,34 @@ class TelemetryService:
       )
 
     row = {
-      "timestamp": datetime.now(UTC).isoformat(),
       "session_id": session_id,
-      "query": query,
-      "latency_ms": int(latency_ms),
-      "prompt_tokens": int(prompt_tokens),
-      "completion_tokens": int(completion_tokens),
-      "cached_tokens": int(cached_tokens),
-      "estimated_cost_usd": float(estimated_cost_usd),
-      "high_risk_flagged": bool(high_risk_flagged),
-      "user_rating": int(user_rating),
-      "rag_latency_ms": int(rag_latency_ms),
-      "planner_latency_ms": int(planner_latency_ms),
-      "executor_latency_ms": int(executor_latency_ms),
-      "execution_mode": str(execution_mode),
-      "experiment_variant": str(experiment_variant),
+      "client_id": client_id,
+      "timestamp": datetime.now(UTC).isoformat(),
+      "query_length": len(query),
+      "latency_ms": latency_ms,
+      "prompt_tokens": prompt_tokens,
+      "completion_tokens": completion_tokens,
+      "cached_tokens": cached_tokens,
+      "estimated_cost_usd": estimated_cost_usd,
+      "high_risk_flagged": high_risk_flagged,
+      "user_rating": user_rating,
+      "rag_latency_ms": rag_latency_ms,
+      "planner_latency_ms": planner_latency_ms,
+      "executor_latency_ms": executor_latency_ms,
+      "model_version": model_version,
+      "prompt_template_version": prompt_template_version,
     }
+
     self._executor.submit(self._insert_bq_row, row)
 
   def log_vertex_experiment_run(
     self,
     experiment_name: str,
     run_name: str,
+    metrics: dict[str, float | int],
     params: dict[str, Any],
-    metrics: dict[str, float],
   ) -> None:
-    """Logs evaluation parameters and metrics to Vertex AI Experiments."""
+    """Logs evaluation metrics and hyperparams to Vertex AI Experiments."""
     if (
       aiplatform is None
       or not self.project_id
@@ -207,37 +223,36 @@ class TelemetryService:
       or self.project_id.startswith("test-")
     ):
       logger.info(
-        "Vertex AI Experiments offline mode; run '%s': params=%s, metrics=%s",
+        "Vertex AI offline mode; recorded experiment run '%s' metrics: %s",
         run_name,
-        params,
         metrics,
       )
       return
 
-    clean_exp = re.sub(r"[^a-z0-9-]", "-", experiment_name.lower()).strip("-")
-    clean_run = re.sub(r"[^a-z0-9-]", "-", run_name.lower()).strip("-")
-
     try:
-      loc = (
-        config.gcp_location
-        if (config.gcp_location and config.gcp_location != "global")
-        else "us-central1"
-      )
       aiplatform.init(
         project=self.project_id,
-        location=loc,
-        experiment=clean_exp,
+        location=config.gcp_location,
+        experiment=experiment_name,
       )
-      with aiplatform.start_run(clean_run):
-        aiplatform.log_params(params)
-        aiplatform.log_metrics(metrics)
+      with aiplatform.start_run(run_name) as run:
+        clean_params = {
+          k: str(v) if isinstance(v, list | dict) else v
+          for k, v in params.items()
+        }
+        run.log_params(clean_params)
+        clean_metrics = {
+          re.sub(r"[^a-zA-Z0-9_\-]", "_", k): float(v)
+          for k, v in metrics.items()
+        }
+        run.log_metrics(clean_metrics)
       logger.info(
-        "Successfully logged run '%s' to Vertex AI Experiments '%s'.",
-        clean_run,
-        clean_exp,
+        "Logged evaluation run '%s' to Vertex AI Experiment '%s'.",
+        run_name,
+        experiment_name,
       )
     except Exception as exc:  # noqa: BLE001
-      logger.info("Vertex AI Experiments export fallback note: %s", exc)
+      logger.info("Vertex AI Experiment logging fallback: %s", exc)
 
 
 telemetry_service = TelemetryService()

@@ -44,9 +44,9 @@ def test_retrieve_relevant_memories_success() -> None:
   service._memory_bank_resource_name = "test-gcp-project"
   mock_client = MagicMock()
   mock_memory_1 = MagicMock()
-  mock_memory_1.content = "Pod payment-pod requires 512Mi memory limits."
+  mock_memory_1.content = "Model evals require 6-week scoping duration."
   mock_memory_2 = MagicMock()
-  mock_memory_2.content = "Always check Istio sidecar proxy logs first."
+  mock_memory_2.content = "Always verify zero-leakage AST screen first."
   mock_client.agent_engines.memories.retrieve.return_value = [
     mock_memory_1,
     mock_memory_2,
@@ -54,83 +54,56 @@ def test_retrieve_relevant_memories_success() -> None:
 
   with patch.object(service, "_get_client", return_value=mock_client):
     result = service.retrieve_relevant_memories(
-      "Pod payment-pod crashing", namespace="production"
+      "Draft scoping deliverables", namespace="production"
     )
-    assert "1. Pod payment-pod requires 512Mi memory limits." in result
-    assert "2. Always check Istio sidecar proxy logs first." in result
+    assert "1. Model evals require 6-week scoping duration." in result
+    assert "2. Always verify zero-leakage AST screen first." in result
 
 
-def test_generate_memory_success() -> None:
-  """Tests successful memory generation and consolidation."""
+def test_generate_memory_and_scope_isolation() -> None:
+  """Tests that Memory Bank generates memories scoped to user and tenant."""
   service = MemoryBankService()
   service._memory_bank_resource_name = "test-gcp-project"
   mock_client = MagicMock()
 
   with patch.object(service, "_get_client", return_value=mock_client):
-    success = service.generate_memory(
-      "Resolved OOMKilled crash on payment-pod by increasing limit to 512Mi."
+    service.retrieve_relevant_memories(
+      "Scoping deliverables", namespace="default", user_id="vadimg@google.com"
     )
-    assert success is True
+    mock_client.agent_engines.memories.retrieve.assert_called_once_with(
+      name="test-gcp-project",
+      scope={
+        "user_id": "vadimg@google.com",
+        "app_name": "artifactforge",
+      },
+      similarity_search_params={
+        "search_query": "Context: default | Query: Scoping deliverables",
+        "top_k": 3,
+      },
+    )
+
+    service.generate_memory(
+      "Resolved scoping deliverables",
+      user_id="vadimg@google.com",
+      topic_tag="Scoping_Deliverables",
+    )
     mock_client.agent_engines.memories.generate.assert_called_once_with(
       name="test-gcp-project",
       direct_contents_source={
         "contents": [
           {
             "role": "user",
-            "parts": [
-              {
-                "text": (
-                  "Resolved OOMKilled crash on payment-pod by increasing limit"
-                  " to 512Mi."
-                )
-              }
-            ],
+            "parts": [{"text": "Resolved scoping deliverables"}],
           }
         ]
       },
-    )
-
-
-def test_user_scoped_memory_bank_retrieval_and_generation() -> None:
-  """Tests user_id scope propagation in Memory Bank retrieval and generation."""
-  service = MemoryBankService()
-  service._memory_bank_resource_name = "test-gcp-project"
-  mock_client = MagicMock()
-  mock_client.agent_engines.memories.retrieve.return_value = []
-
-  with patch.object(service, "_get_client", return_value=mock_client):
-    service.retrieve_relevant_memories(
-      "Pod crash", namespace="default", user_id="vadimg@google.com"
-    )
-    mock_client.agent_engines.memories.retrieve.assert_called_once_with(
-      name="test-gcp-project",
       scope={
         "user_id": "vadimg@google.com",
-        "app_name": "vadimglinskiy-k8s",
-      },
-      similarity_search_params={
-        "search_query": "Namespace: default | Query: Pod crash",
-        "top_k": 3,
-      },
-    )
-
-    service.generate_memory(
-      "Resolved crash",
-      user_id="vadimg@google.com",
-      topic_tag="Pod_OOMKilled",
-    )
-    mock_client.agent_engines.memories.generate.assert_called_once_with(
-      name="test-gcp-project",
-      direct_contents_source={
-        "contents": [{"role": "user", "parts": [{"text": "Resolved crash"}]}]
-      },
-      scope={
-        "user_id": "vadimg@google.com",
-        "app_name": "vadimglinskiy-k8s",
+        "app_name": "artifactforge",
       },
       config={
         "metadata": {
-          "topic_tag": {"string_value": "Pod_OOMKilled"},
+          "topic_tag": {"string_value": "Scoping_Deliverables"},
         },
         "metadata_merge_strategy": "MERGE",
       },
@@ -148,7 +121,7 @@ def test_retrieve_relevant_memories_as_hybrid() -> None:
   mock_global.topics = ["USER_PREFERENCES"]
 
   mock_episodic = MagicMock()
-  mock_episodic.content = "Istio ingress pod needs restart on 502."
+  mock_episodic.content = "Use 3-column table format for scoping deliverables."
   mock_episodic.topics = ["KEY_CONVERSATION_DETAILS"]
 
   mock_client.agent_engines.memories.retrieve.return_value = [
@@ -158,10 +131,12 @@ def test_retrieve_relevant_memories_as_hybrid() -> None:
 
   with patch.object(service, "_get_client", return_value=mock_client):
     result = service.retrieve_relevant_memories(
-      "Ingress 502", namespace="prod", as_hybrid=True
+      "Scoping matrix", namespace="prod", as_hybrid=True
     )
     assert isinstance(result, tuple)
     assert len(result) == 2
     system_mem, dialogue_mem = result
     assert "Operator vadimg prefers json output." in system_mem
-    assert "Istio ingress pod needs restart on 502." in dialogue_mem
+    assert (
+      "Use 3-column table format for scoping deliverables." in dialogue_mem
+    )

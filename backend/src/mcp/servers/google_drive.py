@@ -18,7 +18,7 @@ logger = logging.getLogger("mcp.google_drive")
 class GoogleDriveMCPProvider:
   """Google Drive and Docs tool provider scoped to a specific folder."""
 
-  def __init__(self, allowed_folder_id: str | None = None):
+  def __init__(self, allowed_folder_id: str | None = None) -> None:
     """Initializes Google Drive MCP provider.
 
     Args:
@@ -66,18 +66,18 @@ class GoogleDriveMCPProvider:
       MCPTool(
         name="drive_read_document_content",
         description=(
-          "Reads and extracts full text/markdown content from a Google Doc "
-          f"within the authorized folder.{folder_constraint_msg}"
+          "Reads the full text content of a Google Doc within the authorized "
+          f"folder boundary.{folder_constraint_msg}"
         ),
         inputSchema=MCPToolInputSchema(
           properties={
             "file_id": {
               "type": "string",
-              "description": "The unique Google Drive file ID to read.",
+              "description": "Google Drive file ID.",
             },
             "client_id": {
               "type": "string",
-              "description": "The client tenant ID for verification.",
+              "description": "Client ID for tenant verification.",
             },
           },
           required=["file_id", "client_id"],
@@ -86,28 +86,38 @@ class GoogleDriveMCPProvider:
       MCPTool(
         name="drive_export_in_scope_matrix",
         description=(
-          "Exports the 3-column In-Scope Responsibilities Matrix (Scope Area, "
-          "Technical Deliverables, Responsible Party) into a Google Doc inside "
-          f"the authorized folder.{folder_constraint_msg}"
+          "Creates a new Google Doc formatted with the 3-column In-Scope "
+          "Responsibilities Matrix table inside the client's authorized "
+          f"Google Drive folder.{folder_constraint_msg}"
         ),
         inputSchema=MCPToolInputSchema(
           properties={
             "client_id": {
               "type": "string",
-              "description": "Target client tenant ID.",
+              "description": "The client tenant identifier.",
             },
             "title": {
               "type": "string",
-              "description": "Title of the scoping matrix document.",
+              "description": "The title of the scoping document.",
             },
             "rows": {
               "type": "array",
-              "items": {"type": "object"},
-              "description": "List of matrix rows containing 3 columns.",
-            },
-            "timeline_weeks": {
-              "type": "integer",
-              "description": "Total project duration in weeks.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "project_scope_area": {"type": "string"},
+                  "technical_deliverables": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                  },
+                  "responsible_party": {"type": "string"},
+                },
+                "required": [
+                  "project_scope_area",
+                  "technical_deliverables",
+                  "responsible_party",
+                ],
+              },
             },
           },
           required=["client_id", "title", "rows"],
@@ -115,22 +125,73 @@ class GoogleDriveMCPProvider:
       ),
     ]
 
+  async def list_client_documents(
+    self,
+    client_id: str,
+    folder_id: str | None = None,
+    subfolder_name: str | None = None,
+    max_results: int = 20,
+  ) -> dict[str, Any]:
+    """Public helper to list documents inside authorized folder."""
+    result = await self._list_client_documents(
+      client_id=client_id,
+      folder_id=folder_id or self.allowed_folder_id,
+      subfolder_name=subfolder_name,
+      max_results=max_results,
+    )
+    return result.structuredData or {}
+
+  async def read_document_content(
+    self,
+    file_id: str,
+    client_id: str,
+    folder_id: str | None = None,
+  ) -> dict[str, Any]:
+    """Public helper to read document content."""
+    result = await self._read_document_content(
+      file_id=file_id,
+      client_id=client_id,
+      folder_id=folder_id or self.allowed_folder_id,
+    )
+    content = result.content[0].text if result.content else ""
+    return {"content": content, "file_id": file_id}
+
+  async def drive_export_in_scope_matrix(
+    self,
+    client_id: str,
+    title: str,
+    rows: list[dict[str, Any]],
+    folder_id: str | None = None,
+    timeline_weeks: int = 6,
+  ) -> dict[str, Any]:
+    """Public helper to export matrix to Google Docs."""
+    args = {
+      "title": title,
+      "rows": rows,
+      "timeline_weeks": timeline_weeks,
+    }
+    result = await self._export_in_scope_matrix(
+      client_id=client_id,
+      folder_id=folder_id or self.allowed_folder_id,
+      args=args,
+    )
+    sdata = result.structuredData or {}
+    doc_id = sdata.get("document_id", "")
+    doc_url = sdata.get("drive_url", "")
+    return {
+      "document_id": doc_id,
+      "document_url": doc_url,
+      "drive_url": doc_url,
+      "title": title,
+    }
+
   async def execute_tool(
     self,
     name: str,
     arguments: dict[str, Any],
     context: TenantSecurityContext | None = None,
   ) -> MCPToolCallResult:
-    """Dispatches tool execution with folder sandboxing.
-
-    Args:
-      name: Tool identifier.
-      arguments: Parameters dictionary.
-      context: Active tenant security context.
-
-    Returns:
-      MCPToolCallResult containing output or error.
-    """
+    """Executes a Google Drive MCP tool within the tenant security context."""
     client_id = arguments.get("client_id") or (
       context.client_id if context else "unknown"
     )

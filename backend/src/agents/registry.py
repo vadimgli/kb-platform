@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 from src.a2a.types import AgentCard, AgentSkill
+from src.agents.executor import ExecutorAgent
 from src.agents.llm_agent import LlmAgent
+from src.agents.planner import PlannerAgent
+from src.agents.specialists.scoping import ScopingSpecialistSubAgent
+from src.agents.triage import PrimaryTriageAgent
 from src.capabilities.registry import capability_registry
 
 logger = logging.getLogger("artifactforge.agent_registry")
@@ -14,7 +18,7 @@ logger = logging.getLogger("artifactforge.agent_registry")
 class AgentRegistry:
   """Registers and orchestrates local ADK agents and remote A2A agents."""
 
-  def __init__(self):
+  def __init__(self) -> None:
     self._agents: dict[str, LlmAgent] = {}
     self._skills_map: dict[str, list[AgentSkill]] = {}
 
@@ -58,8 +62,8 @@ class AgentRegistry:
     return AgentCard(
       name="artifactforge_platform",
       description=(
-        "Enterprise Multi-Agent Platform for In-Scope Responsibilities Matrix "
-        "and Zero-Leakage Deliverable Generation."
+        "Enterprise 3-Tier Multi-Agent Platform for In-Scope Responsibilities "
+        "Matrix and Zero-Leakage Deliverable Generation."
       ),
       url=base_url,
       version="1.0.0",
@@ -67,5 +71,11 @@ class AgentRegistry:
     )
 
 
-# Global singleton instance
+# Global singleton instance with default agents registered
 agent_registry = AgentRegistry()
+agent_registry.register_agent("planner", PlannerAgent())
+agent_registry.register_agent("executor", ExecutorAgent())
+agent_registry.register_agent(
+  "scoping_specialist", ScopingSpecialistSubAgent()
+)
+agent_registry.register_agent("triage", PrimaryTriageAgent())

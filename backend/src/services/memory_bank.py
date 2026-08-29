@@ -8,7 +8,7 @@ import vertexai
 from src.core.config import config
 from src.core.logging_config import get_logger
 
-logger = get_logger("k8s-copilot.memory_bank")
+logger = get_logger("artifactforge.memory_bank")
 
 
 class MemoryBankService:
@@ -46,7 +46,9 @@ class MemoryBankService:
             {"managed_memory_topic": "USER_PREFERENCES"},
             {"managed_memory_topic": "KEY_CONVERSATION_DETAILS"},
             {"managed_memory_topic": "EXPLICIT_INSTRUCTIONS"},
-            {"custom_memory_topic": "CLUSTER_QUIRKS_AND_RUNBOOKS"},
+            {
+              "custom_memory_topic": "SCOPING_BEST_PRACTICES_AND_DELIVERABLES"
+            },
           ],
           "consolidation_config": {"revisions_per_candidate_count": 1},
           "generate_memories_examples": [],
@@ -104,18 +106,18 @@ class MemoryBankService:
     user_id: str | None = None,
     as_hybrid: bool = False,
   ) -> str | tuple[str, str]:
-    """Retrieves institutional cluster memories relevant to the incident query.
+    """Retrieves institutional memories relevant to the scoping query.
 
     Args:
-      query: Diagnostic prompt query from operator.
-      namespace: Optional Kubernetes namespace context.
+      query: Scoping or requirements query from operator.
+      namespace: Optional module or tenant context.
       user_id: Optional authenticated operator email/ID for personal memory
         scope.
       as_hybrid: If True, returns a tuple (system_memories, dialogue_memories)
         separating stable user profile/preferences from episodic runbooks.
 
     Returns:
-      Formatted text string of relevant historical cluster memories (or tuple of
+      Formatted text string of relevant historical memories (or tuple of
       strings when as_hybrid=True), or empty string/tuple if unavailable.
     """
     if not self._memory_bank_resource_name:
@@ -130,13 +132,13 @@ class MemoryBankService:
 
     try:
       search_query = (
-        f"Namespace: {namespace} | Query: {query}" if namespace else query
+        f"Context: {namespace} | Query: {query}" if namespace else query
       )
       retrieve_kwargs: dict[str, Any] = {
         "name": self._memory_bank_resource_name,
         "scope": {
           "user_id": user_id or "default_user",
-          "app_name": "vadimglinskiy-k8s",
+          "app_name": "artifactforge",
         },
         "similarity_search_params": {
           "search_query": search_query,
@@ -186,11 +188,10 @@ class MemoryBankService:
     """Consolidates new institutional memory from a completed session.
 
     Args:
-      session_context: Natural language summary of resolved incident.
+      session_context: Natural language summary of scoping deliverable.
       user_id: Optional authenticated operator email/ID for personal memory
         scope.
-      topic_tag: Optional diagnostic topic tag (e.g. 'Pod_OOMKilled') for
-        metadata consolidation.
+      topic_tag: Optional diagnostic topic tag for metadata consolidation.
 
     Returns:
       True if memory generation succeeded, False otherwise.
@@ -212,7 +213,7 @@ class MemoryBankService:
       if user_id:
         generate_kwargs["scope"] = {
           "user_id": user_id,
-          "app_name": "vadimglinskiy-k8s",
+          "app_name": "artifactforge",
         }
       if topic_tag:
         generate_kwargs["config"] = {

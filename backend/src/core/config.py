@@ -63,7 +63,10 @@ class AppConfig:
 
   # Grounding Links & Documentation Settings
   default_k8s_docs_url: str = field(
-    default_factory=lambda: os.getenv("DEFAULT_K8S_DOCS_URL", "")
+    default_factory=lambda: os.getenv(
+      "DEFAULT_DOCS_URL",
+      os.getenv("DEFAULT_K8S_DOCS_URL", ""),
+    )
   )
   default_doc_title: str = field(
     default_factory=lambda: os.getenv("DEFAULT_DOC_TITLE", "")
@@ -73,6 +76,11 @@ class AppConfig:
   cors_allowed_origins: str = field(
     default_factory=lambda: os.getenv("CORS_ALLOWED_ORIGINS", "")
   )
+
+  @property
+  def default_docs_url(self) -> str:
+    """Returns default documentation URL."""
+    return self.default_k8s_docs_url
 
   @property
   def cors_origins_list(self) -> list[str]:

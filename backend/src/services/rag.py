@@ -45,13 +45,13 @@ class VertexRAGService:
       self._client = discoveryengine.SearchServiceClient()
     return self._client
 
-  def search_k8s_documentation(
+  def search_documentation(
     self, query: str, page_size: int = 3
   ) -> list[dict[str, Any]]:
     """Queries Vertex AI Search for relevant documentation snippets.
 
     Args:
-      query: The incident error message or query string.
+      query: The scoping query or requirements search string.
       page_size: Maximum number of documentation snippets to return.
 
     Returns:
@@ -147,3 +147,9 @@ class VertexRAGService:
           "link": config.default_k8s_docs_url,
         }
       ]
+
+  # Backward compatibility alias
+  search_k8s_documentation = search_documentation
+
+
+rag_service = VertexRAGService()

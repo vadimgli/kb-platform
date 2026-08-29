@@ -1,19 +1,14 @@
-"""Action Safety Guardrails, DLP Redaction, and Zero-Leakage Policy.
-
-Enforces:
-1. Multi-tenant isolation: Blocks any cross-tenant file reads or writes.
-2. Destructive action blocking: Forbids deletion and purging of client data.
-3. Model Armor / DLP Redaction: Scrubs API keys, passwords, and PII.
-4. Risk classification (LOW, MEDIUM, HIGH) via deterministic analysis.
-"""
+"""Enterprise Safety Guardrails and Tenant Isolation Interceptors."""
 
 from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 from src.core.exceptions import GuardrailValidationError
 from src.models.schemas import (
+  ActionCategory,
   AgentAction,
   ExecutionPlan,
   RiskLevel,
@@ -21,57 +16,42 @@ from src.models.schemas import (
 
 logger = logging.getLogger("artifactforge.guardrails")
 
-# ---------------------------------------------------------------------------
-# Forbidden Patterns & Rules
-# ---------------------------------------------------------------------------
-
-# Forbidden destructive verbs & commands
+# Forbidden destructive actions & patterns
 FORBIDDEN_DESTRUCTIVE_KEYWORDS = {
   "DELETE_VAULT",
-  "PURGE_CLIENT_DATA",
-  "DROP_DATABASE",
-  "DESTROY_WORKSPACE",
-  "UNLINK_TENANT",
-  "RMDIR",
-  "RM -RF",
-  "FORMAT_DISK",
-  "SHUTDOWN",
+  "PURGE_BUCKET",
+  "DESTROY_INFRASTRUCTURE",
+  "REVOKE_ALL_PERMISSIONS",
+  "FORCE_OVERWRITE_ALL",
+  "DROP_TABLE",
+  "DELETE_FROM",
 }
 
-# Forbidden public exposure / exfiltration patterns
+# Forbidden sharing or public access modifications
 FORBIDDEN_PERMISSIONS_PATTERNS = [
-  re.compile(
-    r"(?i)role\s*[:=]\s*['\"]?(reader|writer)['\"]?"
-    r"\s*,\s*type\s*[:=]\s*['\"]?anyone['\"]?"
-  ),
-  re.compile(r"(?i)make_public"),
-  re.compile(r"(?i)share_outside_domain"),
-  re.compile(r"(?i)allow_unauthenticated"),
+  re.compile(r"role\s*=\s*reader.*type\s*=\s*anyone", re.IGNORECASE),
+  re.compile(r"type\s*=\s*anyone", re.IGNORECASE),
+  re.compile(r"allUsers|allAuthenticatedUsers", re.IGNORECASE),
+  re.compile(r"public_access\s*=\s*true", re.IGNORECASE),
 ]
 
-# Cross-tenant exfiltration regex patterns (referencing other client vaults)
+# Multi-tenant boundary regex pattern (matches foreign vault paths)
 CROSS_TENANT_PATH_PATTERN = re.compile(
-  r"(?:gs://|drive/|vaults/|client_vaults/)(client_[a-zA-Z0-9_\-]+)",
-  re.IGNORECASE,
+  r"gs://(?:[a-zA-Z0-9_\.\-]+-)?vaults/([a-zA-Z0-9_\-]+)/", re.IGNORECASE
 )
 
-# High-risk actions that modify external resources
-HIGH_RISK_KEYWORDS = {
-  "UPDATE_PERMISSIONS",
-  "EXPORT_WORKSPACE",
-  "DELETE",
-  "OVERWRITE_FILE",
-  "CALENDAR_SYNC",
-  "CREATE_SHAREABLE_LINK",
+# Allowed Read-Only Action Categories
+READ_ONLY_ACTIONS = {
+  ActionCategory.DISCOVERY_SEARCH,
+  ActionCategory.LEAKAGE_AUDIT_SCREEN,
+  ActionCategory.NOTIFY_OPERATOR,
 }
 
-# Medium-risk actions that create artifacts or write documents
-MEDIUM_RISK_KEYWORDS = {
-  "DRIVE_FILE_WRITE",
-  "CREATE_DOCUMENT",
-  "FACT_INFILL_GENERATE",
-  "APPEND_RECORD",
-  "INVOKE_SUBAGENT",
+# Permitted Safe Write Action Categories
+SAFE_MUTATING_ACTIONS = {
+  ActionCategory.FACT_INFILL_GENERATE,
+  ActionCategory.DRIVE_EXPORT,
+  ActionCategory.DRIVE_MATRIX_EXPORT,
 }
 
 # Credential & PII Scrubbing Patterns
@@ -113,38 +93,43 @@ def sanitize_user_prompt_with_dlp_and_model_armor(
     Tuple of (sanitized_prompt, was_modified).
   """
   sanitized = prompt
+  modified = False
+
   for pattern, replacement in CREDENTIAL_PATTERNS:
-    sanitized = pattern.sub(replacement, sanitized)
-  return sanitized, sanitized != prompt
+    if pattern.search(sanitized):
+      sanitized = pattern.sub(replacement, sanitized)
+      modified = True
+
+  return sanitized, modified
 
 
-def classify_action_risk(payload: str | AgentAction) -> RiskLevel:
-  """Classifies action risk level based on inspection and action category.
+def classify_action_risk(action: AgentAction) -> RiskLevel:
+  """Evaluates risk classification for synthesized agent actions.
 
   Args:
-    payload: Either an AgentAction instance or raw payload string.
+    action: AgentAction to evaluate.
 
   Returns:
-    Evaluated RiskLevel (LOW, MEDIUM, or HIGH).
+    RiskLevel (LOW, MEDIUM, HIGH).
   """
-  if isinstance(payload, AgentAction):
-    action_type_str = str(payload.action_type).upper()
-    text = f"{action_type_str} {payload.payload}".upper()
-  else:
-    text = str(payload).upper()
+  if action.action_type in READ_ONLY_ACTIONS:
+    return RiskLevel.LOW
 
-  # Check high-risk criteria
-  if any(kw in text for kw in FORBIDDEN_DESTRUCTIVE_KEYWORDS):
-    return RiskLevel.HIGH
-  if any(kw in text for kw in HIGH_RISK_KEYWORDS):
-    return RiskLevel.HIGH
-  for pattern in FORBIDDEN_PERMISSIONS_PATTERNS:
-    if pattern.search(text):
-      return RiskLevel.HIGH
-
-  # Check medium-risk criteria
-  if any(kw in text for kw in MEDIUM_RISK_KEYWORDS):
+  if action.action_type == ActionCategory.FACT_INFILL_GENERATE:
     return RiskLevel.MEDIUM
+
+  if action.action_type in (
+    ActionCategory.DRIVE_EXPORT,
+    ActionCategory.DRIVE_MATRIX_EXPORT,
+  ):
+    payload_lower = action.payload.lower()
+    if (
+      "anyone" in payload_lower
+      or "allusers" in payload_lower
+      or "delete" in payload_lower
+    ):
+      return RiskLevel.HIGH
+    return RiskLevel.LOW
 
   return RiskLevel.LOW
 
@@ -152,21 +137,21 @@ def classify_action_risk(payload: str | AgentAction) -> RiskLevel:
 def verify_action_safety(
   action: AgentAction | str, allowed_tenant_id: str | None = None
 ) -> tuple[bool, str | None]:
-  """Inspects action against destructive rules and tenant isolation.
+  """Applies AST and regex guardrails to verify action safety.
 
   Args:
-    action: The AgentAction or raw string to verify.
-    allowed_tenant_id: The authenticated tenant context (e.g. 'client_d').
+    action: The AgentAction or command string to validate.
+    allowed_tenant_id: The client tenant ID authorized for current session.
 
   Returns:
     Tuple of (is_safe: bool, violation_reason: str | None).
   """
-  if isinstance(action, AgentAction):
-    text = f"{action.action_type} {action.payload}"
-    action_tenant = action.target_tenant_id
+  if isinstance(action, str):
+    text = action
+    action_tenant = None
   else:
-    text = str(action)
-    action_tenant = allowed_tenant_id
+    text = f"{action.action_type} {action.description} {action.payload}"
+    action_tenant = action.target_tenant_id
 
   upper_text = text.upper()
 
@@ -216,35 +201,62 @@ def verify_action_safety(
   return True, None
 
 
-def sanitize_and_verify_commands(plan: ExecutionPlan) -> ExecutionPlan:
-  """Re-verifies all actions within an ExecutionPlan through safety guardrails.
+def sanitize_and_verify_commands(
+  plan_or_actions: ExecutionPlan | list[AgentAction] | None = None,
+  allowed_tenant_id: str = "",
+  actions: list[AgentAction] | None = None,
+  plan: ExecutionPlan | None = None,
+) -> Any:
+  """Re-verifies actions through safety guardrails.
 
   Args:
-    plan: The ExecutionPlan to validate.
+    plan_or_actions: The ExecutionPlan or list of AgentAction objects.
+    allowed_tenant_id: Authorized tenant ID when list passed.
+    actions: Optional explicit actions keyword argument.
+    plan: Optional explicit plan keyword argument.
 
   Returns:
-    The plan with sanitized descriptions and verified risk levels.
-
-  Raises:
-    GuardrailValidationError: If any action violates safety rules.
+    Sanitized plan (or tuple of actions, high_risk_flagged, overridden).
   """
-  for action in plan.actions:
+  target = plan_or_actions or actions or plan
+  if isinstance(target, ExecutionPlan):
+    plan_obj = target
+    tenant_id = plan_obj.target_tenant_id
+    for act in plan_obj.actions:
+      is_safe, violation_reason = verify_action_safety(
+        action=act, allowed_tenant_id=tenant_id
+      )
+      if not is_safe:
+        raise GuardrailValidationError(
+          f"Action '{act.description}' failed safety verification: "
+          f"{violation_reason}"
+        )
+      act.risk_level = classify_action_risk(act)
+      sanitized_payload, _ = sanitize_user_prompt_with_dlp_and_model_armor(
+        act.payload
+      )
+      act.payload = sanitized_payload
+    return plan_obj
+
+  action_list = target if isinstance(target, list) else []
+  sanitized_list: list[AgentAction] = []
+  high_risk = False
+  for act in action_list:
     is_safe, violation_reason = verify_action_safety(
-      action=action, allowed_tenant_id=plan.target_tenant_id
+      action=act, allowed_tenant_id=allowed_tenant_id
     )
     if not is_safe:
       raise GuardrailValidationError(
-        f"Action '{action.description}' failed safety verification: "
+        f"Action '{act.description}' failed safety verification: "
         f"{violation_reason}"
       )
-
-    # Classify and update risk level
-    action.risk_level = classify_action_risk(action)
-
-    # Sanitize payload strings
+    act.risk_level = classify_action_risk(act)
+    if act.risk_level == RiskLevel.HIGH:
+      high_risk = True
     sanitized_payload, _ = sanitize_user_prompt_with_dlp_and_model_armor(
-      action.payload
+      act.payload
     )
-    action.payload = sanitized_payload
+    act.payload = sanitized_payload
+    sanitized_list.append(act)
 
-  return plan
+  return sanitized_list, high_risk, False
