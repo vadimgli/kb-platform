@@ -2,9 +2,9 @@
 
 # 1. DLP De-identification Template for PII & Secret Redaction
 resource "google_data_loss_prevention_deidentify_template" "pii_redaction" {
-  parent       = "projects/${var.gcp_project_id}"
-  display_name = "k8s-copilot-pii-redaction-template"
-  description  = "Redacts Email, Phone, SSN, Credit Cards, API Tokens, and GCP/AWS Credentials from SRE prompts"
+  parent       = "projects/${var.project_id}"
+  display_name = "artifactforge-pii-redaction-template"
+  description  = "Redacts Email, Phone, SSN, Credit Cards, API Tokens, and GCP/AWS Credentials from agent prompts"
 
   deidentify_config {
     info_type_transformations {
@@ -28,8 +28,8 @@ resource "google_data_loss_prevention_deidentify_template" "pii_redaction" {
 
 # 2. DLP Inspection Template
 resource "google_data_loss_prevention_inspect_template" "pii_inspection" {
-  parent       = "projects/${var.gcp_project_id}"
-  display_name = "k8s-copilot-pii-inspect-template"
+  parent       = "projects/${var.project_id}"
+  display_name = "artifactforge-pii-inspect-template"
   description  = "Inspects inbound prompts for sensitive PII, credential tokens, and IP address data types"
 
   inspect_config {
