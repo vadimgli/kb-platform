@@ -65,16 +65,24 @@ class AppConfig:
   default_k8s_docs_url: str = field(
     default_factory=lambda: os.getenv(
       "DEFAULT_DOCS_URL",
-      os.getenv("DEFAULT_K8S_DOCS_URL", ""),
+      os.getenv(
+        "DEFAULT_K8S_DOCS_URL",
+        "https://cloud.google.com/kubernetes-engine/docs",
+      ),
     )
   )
   default_doc_title: str = field(
-    default_factory=lambda: os.getenv("DEFAULT_DOC_TITLE", "")
+    default_factory=lambda: os.getenv(
+      "DEFAULT_DOC_TITLE", "Google Cloud Documentation"
+    )
   )
 
   # Security & CORS Settings
   cors_allowed_origins: str = field(
-    default_factory=lambda: os.getenv("CORS_ALLOWED_ORIGINS", "")
+    default_factory=lambda: os.getenv(
+      "CORS_ALLOWED_ORIGINS",
+      "http://localhost:5173,http://localhost:3000,https://*.altostrat.com,https://*.run.app",
+    )
   )
 
   @property
@@ -99,9 +107,6 @@ class AppConfig:
       "DATA_STORE_ID": self.data_store_id,
       "DEFAULT_MODEL_NAME": self.default_model,
       "LIGHTWEIGHT_MODEL_NAME": self.lightweight_model,
-      "DEFAULT_K8S_DOCS_URL": self.default_k8s_docs_url,
-      "DEFAULT_DOC_TITLE": self.default_doc_title,
-      "CORS_ALLOWED_ORIGINS": self.cors_allowed_origins,
     }
     missing = [name for name, val in required_vars.items() if not val]
     if missing:
