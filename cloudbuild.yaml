@@ -9,9 +9,10 @@ steps:
       - |
         pip install --no-cache-dir uv
         export UV_DEFAULT_INDEX=https://pypi.org/simple
+        export PYTHONPATH=.
         uv sync
         uv run pytest --cov=src --cov-report=term-missing --cov-fail-under=80
-        uv run python evals/run_benchmark.py
+        uv run python -m evals.run_benchmark
 
   # 2. Build production container image using backend/Dockerfile
   - name: 'gcr.io/cloud-builders/docker'

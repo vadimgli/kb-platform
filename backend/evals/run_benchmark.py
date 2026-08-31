@@ -7,7 +7,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from evals.rubric_scorer import grade_plan_against_rubric
+try:
+  from evals.rubric_scorer import grade_plan_against_rubric
+except ImportError:
+  from rubric_scorer import grade_plan_against_rubric
 from src.models.schemas import (
   ActionCategory,
   AgentAction,
