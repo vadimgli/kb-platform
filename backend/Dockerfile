@@ -5,7 +5,8 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_SYSTEM_PYTHON=1 \
-    UV_DEFAULT_INDEX=https://pypi.org/simple
+    UV_DEFAULT_INDEX=https://pypi.org/simple \
+    PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
@@ -32,4 +33,4 @@ USER copilot
 EXPOSE 8000
 
 # Run Uvicorn server bound to all network interfaces on port provided by Cloud Run (defaulting to 8000)
-CMD ["sh", "-c", "uv run uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
