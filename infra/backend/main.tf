@@ -197,7 +197,7 @@ resource "google_cloud_run_service" "artifactforge_api" {
         }
         env {
           name  = "CORS_ALLOWED_ORIGINS"
-          value = "*"
+          value = "http://localhost:5173,http://localhost:3000,https://*.altostrat.com,https://*.run.app"
         }
         env {
           name  = "GCS_CORPUS_BUCKET"

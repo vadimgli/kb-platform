@@ -56,7 +56,7 @@ steps:
       - '--cpu=2'
       - '--min-instances=1'
       - '--max-instances=10'
-      - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},DATA_STORE_ID=${_DATA_STORE_ID},DEFAULT_MODEL_NAME=gemini-2.5-flash,LIGHTWEIGHT_MODEL_NAME=gemini-2.5-flash-lite,PLANNER_MODEL_NAME=gemini-2.5-flash,EXECUTOR_MODEL_NAME=gemini-2.5-flash-lite,CORS_ALLOWED_ORIGINS=*'
+      - '--set-env-vars=GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${_REGION},DATA_STORE_ID=${_DATA_STORE_ID},DEFAULT_MODEL_NAME=gemini-2.5-flash,LIGHTWEIGHT_MODEL_NAME=gemini-2.5-flash-lite,PLANNER_MODEL_NAME=gemini-2.5-flash,EXECUTOR_MODEL_NAME=gemini-2.5-flash-lite,CORS_ALLOWED_ORIGINS=http://localhost:5173\,http://localhost:3000\,https://*.altostrat.com\,https://*.run.app'
       - '--no-allow-unauthenticated'
       - '--timeout=300'
 
