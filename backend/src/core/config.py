@@ -85,6 +85,11 @@ class AppConfig:
     )
   )
 
+  # Google Drive Sandboxing Settings
+  allowed_drive_folder_id: str = field(
+    default_factory=lambda: os.getenv("ALLOWED_DRIVE_FOLDER_ID", "")
+  )
+
   @property
   def default_docs_url(self) -> str:
     """Returns default documentation URL."""

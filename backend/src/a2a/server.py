@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Request
+from pydantic import BaseModel
 
 from src.a2a.types import (
   A2AMessage,
@@ -20,39 +21,27 @@ logger = logging.getLogger("a2a.server")
 
 def create_a2a_router(
   agent: Any,
-  agent_name: str = "artifactforge_platform",
+  agent_name: str = "artifactforge_agent",
   description: str = (
     "Enterprise Multi-Agent Platform for Deliverable Generation."
   ),
-  base_url: str = "http://localhost:8000",
+  base_url: str = "https://artifactforge-api-415008794281.us-central1.run.app",
   version: str = "1.0.0",
   skills: list[AgentSkill] | None = None,
 ) -> APIRouter:
-  """Creates a FastAPI router implementing the A2A server specification.
-
-  Args:
-    agent: Target backend agent instance.
-    agent_name: Unique agent identifier.
-    description: Agent summary for discovery.
-    base_url: Public base URL where agent is hosted.
-    version: Agent implementation version string.
-    skills: List of AgentSkill descriptors exposed.
-
-  Returns:
-    Configured FastAPI APIRouter.
-  """
+  """Creates a FastAPI router implementing the A2A server specification."""
   router = APIRouter(tags=["A2A Protocol"])
 
   default_skills = skills or [
     AgentSkill(
       id="scoping_deliverables",
-      name="Scoping Deliverables Generation",
-      description="Generates zero-leakage enterprise scoping deliverables.",
-    ),
-    AgentSkill(
-      id="quality_critique",
-      name="Quality and Leakage Audit",
-      description="Screens cross-tenant leakage and verifies rubrics.",
+      name="scoping_deliverables",
+      description=(
+        "Synthesizes 3-column in-scope responsibilities matrix (Scope Area,"
+        " Technical Deliverables, Responsible Party) with zero cross-tenant"
+        " leakage."
+      ),
+      tags=["SCOPING_DELIVERABLES"],
     ),
   ]
 
@@ -69,33 +58,40 @@ def create_a2a_router(
     """Publishes the A2A Agent Card."""
     return card
 
-  @router.post("/a2a/v1/message", response_model=A2AMessage)
-  async def receive_a2a_message(message: A2AMessage) -> A2AMessage:
-    """Receives and processes incoming A2A message tasks."""
-    logger.info(
-      "Received A2A message %s from '%s' [Task Skill: %s]",
-      message.id,
-      message.sender,
-      message.task.skill_id if message.task else "None",
-    )
+  async def _handle_incoming_a2a(
+    raw_payload: dict[str, Any],
+  ) -> dict[str, Any]:
+    """Processes incoming A2A payloads from Gemini Enterprise or peer agents."""
+    logger.info("Processing A2A payload keys: %s", list(raw_payload.keys()))
 
-    skill_id = message.task.skill_id if message.task else "scoping_deliverables"
-    input_payload = (
-      message.task.input_payload
-      if message.task and message.task.input_payload
-      else {}
-    )
-    query_text = input_payload.get("query", message.content or "")
-    client_id = input_payload.get("client_id", "default")
+    # Extract user message/query from flexible A2A formats
+    query_text = ""
+    client_id = raw_payload.get("client_id", "client-fsi-alpha")
 
-    if not query_text and not message.task:
-      return A2AMessage(
-        role="agent",
-        sender=agent_name,
-        recipient=message.sender,
-        in_response_to=message.id,
-        error="Message did not contain an actionable task or content",
+    if "messages" in raw_payload and isinstance(raw_payload["messages"], list):
+      last_msg = raw_payload["messages"][-1]
+      if isinstance(last_msg, dict):
+        query_text = last_msg.get("content", "")
+      elif isinstance(last_msg, str):
+        query_text = last_msg
+
+    if not query_text:
+      query_text = (
+        raw_payload.get("query")
+        or raw_payload.get("message")
+        or raw_payload.get("content")
+        or raw_payload.get("prompt")
+        or ""
       )
+
+    task_dict = raw_payload.get("task", {})
+    if isinstance(task_dict, dict) and not query_text:
+      input_payload = task_dict.get("input_payload", {})
+      query_text = input_payload.get("query", "")
+      client_id = input_payload.get("client_id", client_id)
+
+    if not query_text:
+      query_text = "Generate an in-scope deliverables matrix and implementation workplan."
 
     try:
       if hasattr(agent, "generate_plan"):
@@ -117,32 +113,46 @@ def create_a2a_router(
         }
         summary_text = str(output_data)
 
-      return A2AMessage(
-        role="agent",
-        sender=agent_name,
-        recipient=message.sender,
-        in_response_to=message.id,
-        content=summary_text,
-        task=A2ATask(
-          skill_id=skill_id,
-          input_payload=input_payload or {"query": query_text},
-          status="COMPLETED",
-          result=summary_text,
-        ),
-        response=A2AResponsePayload(
-          status="SUCCESS",
-          result_data=output_data,
-        ),
-      )
+      return {
+        "role": "agent",
+        "sender": agent_name,
+        "recipient": raw_payload.get("sender", "gemini_enterprise"),
+        "in_response_to": raw_payload.get("id"),
+        "content": summary_text,
+        "reply": summary_text,
+        "task": {
+          "skill_id": "scoping_deliverables",
+          "input_payload": {"query": query_text, "client_id": client_id},
+          "status": "COMPLETED",
+          "result": summary_text,
+        },
+        "response": {
+          "status": "SUCCESS",
+          "result_data": output_data,
+        },
+      }
     except Exception as err:
-      logger.exception("Error processing A2A task %s", message.id)
-      return A2AMessage(
-        role="agent",
-        sender=agent_name,
-        recipient=message.sender,
-        in_response_to=message.id,
-        error=f"Task processing failed: {err!s}",
-      )
+      logger.exception("Error processing A2A task")
+      return {
+        "role": "agent",
+        "sender": agent_name,
+        "content": f"Task processing failed: {err!s}",
+        "reply": f"Task processing failed: {err!s}",
+        "error": str(err),
+      }
+
+  @router.post("/", summary="Root A2A Agent Endpoint")
+  @router.post("/tasks", summary="A2A Tasks Endpoint")
+  @router.post("/messages", summary="A2A Messages Endpoint")
+  @router.post("/a2a/v1/message", summary="A2A v1 Message Endpoint")
+  @router.post("/v1/tasks", summary="A2A v1 Tasks Endpoint")
+  async def receive_a2a_entrypoint(request: Request) -> dict[str, Any]:
+    """Unified entrypoint handling root POST and sub-path A2A invocations."""
+    try:
+      payload = await request.json()
+    except Exception:
+      payload = {}
+    return await _handle_incoming_a2a(payload)
 
   return router
 
@@ -152,19 +162,9 @@ def export_as_a2a_app(
   agent_name: str = "artifactforge_platform",
   **kwargs: Any,
 ) -> Any:
-  """Wraps an agent in a standalone FastAPI application implementing A2A.
-
-  Args:
-    agent: Target backend agent instance.
-    agent_name: Unique agent identifier.
-    **kwargs: Additional parameters passed to create_a2a_router.
-
-  Returns:
-    FastAPI application instance.
-  """
+  """Wraps an agent in a standalone FastAPI application implementing A2A."""
   from fastapi import FastAPI
 
   app = FastAPI(title=agent_name)
   app.include_router(create_a2a_router(agent, agent_name=agent_name, **kwargs))
   return app
-
