@@ -16,6 +16,8 @@ from src.a2a.types import (
   AgentSkill,
 )
 
+import uuid
+
 logger = logging.getLogger("a2a.server")
 
 
@@ -66,6 +68,7 @@ def create_a2a_router(
 
     rpc_id = raw_payload.get("id", "1")
     rpc_version = raw_payload.get("jsonrpc", "2.0")
+    req_context_id = raw_payload.get("contextId")
 
     # Extract user message/query from flexible A2A & JSON-RPC formats
     query_text = ""
@@ -74,6 +77,8 @@ def create_a2a_router(
     # 1. Check JSON-RPC 2.0 params structure (Discovery Engine format)
     params = raw_payload.get("params", {})
     if isinstance(params, dict):
+      if not req_context_id:
+        req_context_id = params.get("contextId")
       msg_obj = params.get("message", {})
       if isinstance(msg_obj, dict):
         parts = msg_obj.get("parts", [])
@@ -120,6 +125,10 @@ def create_a2a_router(
     if not query_text:
       query_text = "Generate an in-scope deliverables matrix and implementation workplan."
 
+    context_id = req_context_id or f"ctx_{uuid.uuid4().hex[:12]}"
+    msg_id = f"msg_{uuid.uuid4().hex[:12]}"
+    task_id = f"task_{uuid.uuid4().hex[:12]}"
+
     logger.info("Extracted A2A query: '%s' for client: '%s'", query_text[:80], client_id)
 
     try:
@@ -142,11 +151,11 @@ def create_a2a_router(
         }
         summary_text = str(output_data)
 
+      # Build Agent Result satisfying both Message & Task Pydantic schemas in Discovery Engine
       agent_result = {
+        # Message schema fields (satisfies SendMessageSuccessResponse.result.Message)
+        "messageId": msg_id,
         "role": "agent",
-        "sender": agent_name,
-        "recipient": raw_payload.get("sender", "gemini_enterprise"),
-        "in_response_to": str(rpc_id),
         "parts": [
           {
             "text": summary_text,
@@ -156,7 +165,25 @@ def create_a2a_router(
         ],
         "content": summary_text,
         "reply": summary_text,
+        # Task schema fields (satisfies SendMessageSuccessResponse.result.Task)
+        "id": task_id,
+        "contextId": context_id,
+        "status": {
+          "state": "COMPLETED",
+          "message": summary_text,
+        },
+        "task": {
+          "id": task_id,
+          "contextId": context_id,
+          "skill_id": "scoping_deliverables",
+          "status": {
+            "state": "COMPLETED",
+            "message": summary_text,
+          },
+          "result": summary_text,
+        },
         "message": {
+          "messageId": msg_id,
           "role": "agent",
           "content": summary_text,
           "parts": [{"text": summary_text}],
@@ -169,17 +196,8 @@ def create_a2a_router(
             }
           }
         ],
-        "status": "COMPLETED",
-        "task": {
-          "skill_id": "scoping_deliverables",
-          "input_payload": {"query": query_text, "client_id": client_id},
-          "status": "COMPLETED",
-          "result": summary_text,
-        },
-        "response": {
-          "status": "SUCCESS",
-          "result_data": output_data,
-        },
+        "artifacts": [],
+        "metadata": output_data,
       }
 
       # Top-level JSON-RPC 2.0 wrapper matching Discovery Engine's SendMessageSuccessResponse
@@ -205,6 +223,17 @@ def create_a2a_router(
         "error": {
           "code": -32603,
           "message": error_msg,
+        },
+        "result": {
+          "messageId": msg_id,
+          "id": task_id,
+          "contextId": context_id,
+          "role": "agent",
+          "parts": [{"text": error_msg}],
+          "status": {
+            "state": "FAILED",
+            "message": error_msg,
+          },
         },
         "role": "agent",
         "sender": agent_name,
