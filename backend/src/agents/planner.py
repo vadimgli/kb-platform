@@ -90,3 +90,28 @@ class PlannerAgent(LlmAgent):
     if plan.matrix:
       plan.matrix.client_id = client_id
     return plan
+
+  async def converse(
+    self,
+    query: str,
+    client_id: str = "default",
+  ) -> str:
+    """Answers general questions conversationally with Enterprise context."""
+    system_prompt = (
+      "You are the Enterprise Assistant for ArtifactForge integrated within Gemini Enterprise.\n"
+      "You can answer general technical, cloud architecture, and project management questions.\n"
+      "You have integrated Model Context Protocol (MCP) access to the authorized client Google Drive folder "
+      "(ID: 1IIxHSQLgvUSTwBpuZXDvTcUTWIBCWxHn) for reading discovery notes and exporting In-Scope Responsibilities Matrices into Google Docs.\n"
+      "If the user asks general questions or asks about your capabilities/Google Drive access, answer accurately, "
+      "professionally, and helpfully. Offer to generate a 3-column In-Scope Responsibilities Matrix or implementation workplan if relevant."
+    )
+    response = await self.client.aio.models.generate_content(
+      model=self.model_name,
+      contents=[query],
+      config=types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        temperature=0.7,
+      ),
+    )
+    return response.text or "I am your Gemini Enterprise assistant. How can I assist you today?"
+

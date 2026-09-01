@@ -132,7 +132,10 @@ def create_a2a_router(
     logger.info("Extracted A2A query: '%s' for client: '%s'", query_text[:80], client_id)
 
     try:
-      if hasattr(agent, "generate_plan"):
+      scoping_keywords = ["scop", "matrix", "deliverable", "template", "workplan", "sow", "responsibilit", "plan", "phase", "implement"]
+      is_scoping_query = any(kw in query_text.lower() for kw in scoping_keywords)
+
+      if is_scoping_query and hasattr(agent, "generate_plan"):
         plan = await agent.generate_plan(
           query=query_text,
           client_id=client_id,
@@ -143,18 +146,29 @@ def create_a2a_router(
           else plan
         )
         
-        # Build rich markdown table from the generated matrix
+        # Build rich markdown table safely handling both schema formats
         if hasattr(plan, "matrix") and plan.matrix and plan.matrix.items:
           table_md = "\n\n### 📋 In-Scope Responsibilities Matrix\n\n| Project Scope Area | Technical Deliverables | Responsible Party |\n|:---|:---|:---|\n"
           for item in plan.matrix.items:
-            delivs = "<br>".join(f"• {d}" for d in item.deliverables) if isinstance(item.deliverables, list) else item.deliverables
-            table_md += f"| **{item.scope_area}** | {delivs} | {item.responsible_party} |\n"
+            scope_area = getattr(item, "project_scope_area", getattr(item, "scope_area", "Scope Area"))
+            raw_delivs = getattr(item, "technical_deliverables", getattr(item, "deliverables", ["Deliverables"]))
+            resp_party = getattr(item, "responsible_party", getattr(item, "owner", "Google FDE Team"))
+            
+            if isinstance(raw_delivs, list):
+              delivs = "<br>".join(f"• {d}" for d in raw_delivs)
+            else:
+              delivs = str(raw_delivs)
+              
+            table_md += f"| **{scope_area}** | {delivs} | {resp_party} |\n"
           
           doc_hash = abs(hash(query_text)) % 100000
           doc_link = f"\n\n📄 **Google Drive Deliverable**: [Open Scoping Document in Google Docs](https://docs.google.com/document/d/gdoc_matrix_{client_id}_{doc_hash}/edit)\n*(Sandboxed to authorized folder: `1IIxHSQLgvUSTwBpuZXDvTcUTWIBCWxHn`)*"
           summary_text = f"**Project Scope Summary**: {plan.summary}\n\n**Client Tenant**: `{client_id}`{table_md}{doc_link}"
         else:
           summary_text = getattr(plan, "summary", str(output_data))
+      elif hasattr(agent, "converse"):
+        summary_text = await agent.converse(query=query_text, client_id=client_id)
+        output_data = {"status": "conversational", "query": query_text}
       else:
         output_data = {
           "status": "acknowledged",
