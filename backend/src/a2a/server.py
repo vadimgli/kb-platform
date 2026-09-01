@@ -64,17 +64,43 @@ def create_a2a_router(
     """Processes incoming A2A payloads from Gemini Enterprise or peer agents."""
     logger.info("Processing A2A payload keys: %s", list(raw_payload.keys()))
 
-    # Extract user message/query from flexible A2A formats
+    rpc_id = raw_payload.get("id", "1")
+    rpc_version = raw_payload.get("jsonrpc", "2.0")
+
+    # Extract user message/query from flexible A2A & JSON-RPC formats
     query_text = ""
     client_id = raw_payload.get("client_id", "client-fsi-alpha")
 
-    if "messages" in raw_payload and isinstance(raw_payload["messages"], list):
+    # 1. Check JSON-RPC 2.0 params structure (Discovery Engine format)
+    params = raw_payload.get("params", {})
+    if isinstance(params, dict):
+      msg_obj = params.get("message", {})
+      if isinstance(msg_obj, dict):
+        parts = msg_obj.get("parts", [])
+        if parts and isinstance(parts, list):
+          for p in parts:
+            if isinstance(p, dict) and p.get("text"):
+              query_text = p.get("text", "")
+              break
+        if not query_text:
+          query_text = msg_obj.get("content", "")
+
+    # 2. Check messages array format
+    if not query_text and "messages" in raw_payload and isinstance(raw_payload["messages"], list):
       last_msg = raw_payload["messages"][-1]
       if isinstance(last_msg, dict):
-        query_text = last_msg.get("content", "")
+        parts = last_msg.get("parts", [])
+        if parts and isinstance(parts, list):
+          for p in parts:
+            if isinstance(p, dict) and p.get("text"):
+              query_text = p.get("text", "")
+              break
+        if not query_text:
+          query_text = last_msg.get("content", "")
       elif isinstance(last_msg, str):
         query_text = last_msg
 
+    # 3. Check flat fields
     if not query_text:
       query_text = (
         raw_payload.get("query")
@@ -84,6 +110,7 @@ def create_a2a_router(
         or ""
       )
 
+    # 4. Check task input payload
     task_dict = raw_payload.get("task", {})
     if isinstance(task_dict, dict) and not query_text:
       input_payload = task_dict.get("input_payload", {})
@@ -92,6 +119,8 @@ def create_a2a_router(
 
     if not query_text:
       query_text = "Generate an in-scope deliverables matrix and implementation workplan."
+
+    logger.info("Extracted A2A query: '%s' for client: '%s'", query_text[:80], client_id)
 
     try:
       if hasattr(agent, "generate_plan"):
@@ -113,13 +142,34 @@ def create_a2a_router(
         }
         summary_text = str(output_data)
 
-      return {
+      agent_result = {
         "role": "agent",
         "sender": agent_name,
         "recipient": raw_payload.get("sender", "gemini_enterprise"),
-        "in_response_to": raw_payload.get("id"),
+        "in_response_to": str(rpc_id),
+        "parts": [
+          {
+            "text": summary_text,
+            "mimeType": "text/plain",
+            "data": summary_text,
+          }
+        ],
         "content": summary_text,
         "reply": summary_text,
+        "message": {
+          "role": "agent",
+          "content": summary_text,
+          "parts": [{"text": summary_text}],
+        },
+        "candidates": [
+          {
+            "content": {
+              "role": "model",
+              "parts": [{"text": summary_text}],
+            }
+          }
+        ],
+        "status": "COMPLETED",
         "task": {
           "skill_id": "scoping_deliverables",
           "input_payload": {"query": query_text, "client_id": client_id},
@@ -131,14 +181,37 @@ def create_a2a_router(
           "result_data": output_data,
         },
       }
+
+      # Top-level JSON-RPC 2.0 wrapper matching Discovery Engine's SendMessageSuccessResponse
+      response_payload = {
+        "jsonrpc": rpc_version,
+        "id": rpc_id,
+        "result": agent_result,
+        **agent_result,
+      }
+
+      logger.info(
+        "A2A Outgoing Response for query '%s': status=SUCCESS, summary_len=%d",
+        query_text[:60],
+        len(summary_text),
+      )
+      return response_payload
     except Exception as err:
       logger.exception("Error processing A2A task")
+      error_msg = f"Task processing failed: {err!s}"
       return {
+        "jsonrpc": rpc_version,
+        "id": rpc_id,
+        "error": {
+          "code": -32603,
+          "message": error_msg,
+        },
         "role": "agent",
         "sender": agent_name,
-        "content": f"Task processing failed: {err!s}",
-        "reply": f"Task processing failed: {err!s}",
-        "error": str(err),
+        "parts": [{"text": error_msg}],
+        "content": error_msg,
+        "reply": error_msg,
+        "status": "FAILED",
       }
 
   @router.post("/", summary="Root A2A Agent Endpoint")
@@ -152,6 +225,7 @@ def create_a2a_router(
       payload = await request.json()
     except Exception:
       payload = {}
+    logger.info("A2A INCOMING REQUEST URL: %s | Payload keys: %s", request.url.path, list(payload.keys()))
     return await _handle_incoming_a2a(payload)
 
   return router
