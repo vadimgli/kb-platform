@@ -72,7 +72,7 @@ def create_a2a_router(
 
     # Extract user message/query from flexible A2A & JSON-RPC formats
     query_text = ""
-    client_id = raw_payload.get("client_id", "client-fsi-alpha")
+    client_id = raw_payload.get("client_id", "enterprise-workspace")
 
     # 1. Check JSON-RPC 2.0 params structure (Discovery Engine format)
     params = raw_payload.get("params", {})
@@ -163,7 +163,8 @@ def create_a2a_router(
           
           doc_hash = abs(hash(query_text)) % 100000
           doc_link = f"\n\n📄 **Google Drive Deliverable**: [Open Scoping Document in Google Docs](https://docs.google.com/document/d/gdoc_matrix_{client_id}_{doc_hash}/edit)\n*(Sandboxed to authorized folder: `1IIxHSQLgvUSTwBpuZXDvTcUTWIBCWxHn`)*"
-          summary_text = f"**Project Scope Summary**: {plan.summary}\n\n**Client Tenant**: `{client_id}`{table_md}{doc_link}"
+          client_tenant_str = f"**Client Tenant**: `{client_id}`\n\n" if client_id not in ("default", "enterprise-workspace") else ""
+          summary_text = f"**Project Scope Summary**: {plan.summary}\n\n{client_tenant_str}{table_md}{doc_link}"
         else:
           summary_text = getattr(plan, "summary", str(output_data))
       elif hasattr(agent, "converse"):

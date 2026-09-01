@@ -94,31 +94,46 @@ class PlannerAgent(LlmAgent):
   async def converse(
     self,
     query: str,
-    client_id: str = "client-fsi-alpha",
+    client_id: str = "default",
   ) -> str:
-    """Answers general and Google Drive folder questions conversationally with Enterprise context."""
+    """Answers general and Google Drive folder questions conversationally with real enterprise context."""
+    folder_id = config.allowed_drive_folder_id or "1IIxHSQLgvUSTwBpuZXDvTcUTWIBCWxHn"
+    
+    # Check for real files via GoogleDriveMCPProvider
+    files_context = ""
+    try:
+      from src.mcp.servers.google_drive import GoogleDriveMCPProvider
+      drive_provider = GoogleDriveMCPProvider(allowed_folder_id=folder_id)
+      doc_list = await drive_provider.list_client_documents(client_id=client_id, folder_id=folder_id)
+      files = doc_list.get("files", [])
+      if files:
+        file_summaries = [f"- {f.get('name', 'Untitled')} (ID: {f.get('id', '')})" for f in files]
+        files_context = f"\nReal files found in authorized folder ({folder_id}):\n" + "\n".join(file_summaries)
+      else:
+        files_context = f"\nAuthorized folder ({folder_id}) currently contains no uploaded documents."
+    except Exception as e:
+      logger.warning("Could not list live Drive files: %s", e)
+      files_context = f"\nAuthorized Google Drive Folder ID: {folder_id}"
+
     system_prompt = (
-      "You are the Enterprise Delivery Assistant for ArtifactForge integrated within Gemini Enterprise.\n"
-      "You have direct access via Google Drive MCP to the authorized client folder (ID: 1IIxHSQLgvUSTwBpuZXDvTcUTWIBCWxHn).\n\n"
-      "Folder Content Overview:\n"
-      "- Client: client-fsi-alpha\n"
-      "- Discovery Transcripts: Discovery notes and architectural requirements for real-time transaction processing, "
-      "fraud detection pipelines, Dataflow streaming, Bigtable low-latency serving, and Vertex AI model evaluation.\n"
-      "- Master SOW & Agreement: Scoping requirements for a 6-week Google Cloud FDE delivery engagement.\n"
-      "- Deliverables Folder: Target export destination for generated Google Docs deliverables matrices.\n\n"
+      "You are the Enterprise Assistant for ArtifactForge integrated within Gemini Enterprise.\n"
+      f"You have Model Context Protocol (MCP) access to the authorized client Google Drive folder (ID: {folder_id}).\n"
+      f"{files_context}\n\n"
       "Guidelines:\n"
-      "1. If the user asks to summarize or list the folder contents, provide a structured summary of the SOW and discovery notes for client-fsi-alpha.\n"
-      "2. If the user asks general technical, cloud architecture, or scoping questions, answer helpfully and accurately.\n"
-      "3. Offer to generate an executive In-Scope Responsibilities Matrix table and export it directly to Google Docs in this folder."
+      "1. If the user asks about the folder or files, report the actual files found above. Never invent fake client names or fake document titles.\n"
+      "2. If no files are in the folder, inform the user and offer to generate an in-scope deliverables matrix based on their prompt requirements.\n"
+      "3. Answer general technical, cloud architecture, and project management questions accurately and helpfully.\n"
+      "4. If the user provides scoping requirements, offer to synthesize a 3-column In-Scope Responsibilities Matrix and export it to Google Docs."
     )
     response = await self.client.aio.models.generate_content(
       model=self.model_name,
       contents=[query],
       config=types.GenerateContentConfig(
         system_instruction=system_prompt,
-        temperature=0.4,
+        temperature=0.2,
       ),
     )
-    return response.text or "I am your Gemini Enterprise assistant. I have access to your authorized Google Drive folder (1IIxHSQLgvUSTwBpuZXDvTcUTWIBCWxHn). How can I assist you?"
+    return response.text or f"I am your Gemini Enterprise assistant with access to Google Drive folder {folder_id}. How can I assist you?"
+
 
 
