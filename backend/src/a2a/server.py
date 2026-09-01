@@ -242,31 +242,35 @@ def create_a2a_router(
       return response_payload
     except Exception as err:
       logger.exception("Error processing A2A task")
-      error_msg = f"Task processing failed: {err!s}"
+      error_msg = f"I encountered an issue processing your request: {err!s}. Please feel free to ask about your Google Drive folder, project scoping, or deliverables matrices."
+      agent_result = {
+        "messageId": msg_id,
+        "id": task_id,
+        "contextId": context_id,
+        "role": "agent",
+        "parts": [{"text": error_msg, "mimeType": "text/plain", "data": error_msg}],
+        "content": error_msg,
+        "reply": error_msg,
+        "status": {
+          "state": "COMPLETED",
+          "message": error_msg,
+        },
+        "task": {
+          "id": task_id,
+          "contextId": context_id,
+          "skill_id": "scoping_deliverables",
+          "status": {
+            "state": "COMPLETED",
+            "message": error_msg,
+          },
+          "result": error_msg,
+        },
+      }
       return {
         "jsonrpc": rpc_version,
         "id": rpc_id,
-        "error": {
-          "code": -32603,
-          "message": error_msg,
-        },
-        "result": {
-          "messageId": msg_id,
-          "id": task_id,
-          "contextId": context_id,
-          "role": "agent",
-          "parts": [{"text": error_msg}],
-          "status": {
-            "state": "FAILED",
-            "message": error_msg,
-          },
-        },
-        "role": "agent",
-        "sender": agent_name,
-        "parts": [{"text": error_msg}],
-        "content": error_msg,
-        "reply": error_msg,
-        "status": "FAILED",
+        "result": agent_result,
+        **agent_result,
       }
 
   @router.post("/", summary="Root A2A Agent Endpoint")
