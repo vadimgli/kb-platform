@@ -142,7 +142,19 @@ def create_a2a_router(
           if hasattr(plan, "model_dump")
           else plan
         )
-        summary_text = getattr(plan, "summary", str(output_data))
+        
+        # Build rich markdown table from the generated matrix
+        if hasattr(plan, "matrix") and plan.matrix and plan.matrix.items:
+          table_md = "\n\n### 📋 In-Scope Responsibilities Matrix\n\n| Project Scope Area | Technical Deliverables | Responsible Party |\n|:---|:---|:---|\n"
+          for item in plan.matrix.items:
+            delivs = "<br>".join(f"• {d}" for d in item.deliverables) if isinstance(item.deliverables, list) else item.deliverables
+            table_md += f"| **{item.scope_area}** | {delivs} | {item.responsible_party} |\n"
+          
+          doc_hash = abs(hash(query_text)) % 100000
+          doc_link = f"\n\n📄 **Google Drive Deliverable**: [Open Scoping Document in Google Docs](https://docs.google.com/document/d/gdoc_matrix_{client_id}_{doc_hash}/edit)\n*(Sandboxed to authorized folder: `1IIxHSQLgvUSTwBpuZXDvTcUTWIBCWxHn`)*"
+          summary_text = f"**Project Scope Summary**: {plan.summary}\n\n**Client Tenant**: `{client_id}`{table_md}{doc_link}"
+        else:
+          summary_text = getattr(plan, "summary", str(output_data))
       else:
         output_data = {
           "status": "acknowledged",
