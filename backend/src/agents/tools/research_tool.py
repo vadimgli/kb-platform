@@ -47,13 +47,20 @@ class ResearchAgentTool:
         folder_id=allowed_folder_id,
       )
       for f in files_res.get("files", [])[:3]:
-        content_res = await self.drive_provider.read_document_content(
-          file_id=f["id"],
-          client_id=client_id,
-        )
-        body = content_res.get("content", "")
-        if body:
-          findings.append(f"Drive [{f.get('name', 'doc')}]: {body}")
+        file_id = f.get("id")
+        if not file_id:
+          continue
+        try:
+          content_res = await self.drive_provider.read_document_content(
+            file_id=file_id,
+            client_id=client_id,
+            folder_id=allowed_folder_id,
+          )
+          body = content_res.get("content", "")
+          if body:
+            findings.append(f"Drive [{f.get('name', 'doc')}]: {body}")
+        except Exception as read_err:
+          logger.warning("Failed reading Drive doc '%s': %s", file_id, read_err)
     except Exception as err:
       logger.warning("Drive research note: %s", err)
     return findings
