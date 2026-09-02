@@ -1,6 +1,7 @@
 """Unit tests for the MCP module, Google Drive provider, and interceptors."""
 
 import unittest
+from unittest.mock import MagicMock
 
 from src.mcp.interceptors import (
   ModelArmorScrubbingInterceptor,
@@ -45,6 +46,17 @@ class TestMCPModule(unittest.IsolatedAsyncioTestCase):
     provider = GoogleDriveMCPProvider(
       allowed_folder_id="restricted_folder_999"
     )
+    mock_drive = MagicMock()
+    mock_drive.files().list().execute.return_value = {
+      "files": [
+        {
+          "id": "doc_1",
+          "name": "Discovery_Notes.docx",
+          "mimeType": "application/vnd.google-apps.document",
+        }
+      ]
+    }
+    provider._drive_service = mock_drive
     toolset = MCPToolSet(drive_provider=provider)
     await toolset.initialize()
 

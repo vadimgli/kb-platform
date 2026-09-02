@@ -123,9 +123,19 @@ class TestThreeTierArchitecture(unittest.IsolatedAsyncioTestCase):
       {"snippet": "Grounded context"}
     ]
     research_tool = ResearchAgentTool(rag_service=mock_rag)
+    mock_drive_tool = MagicMock(spec=GoogleDriveExportTool)
+    mock_drive_tool.export_matrix_to_doc = AsyncMock(
+      return_value={
+        "document_url": "https://docs.google.com/document/d/doc_mock_123/edit",
+        "document_id": "doc_mock_123",
+        "drive_url": "https://docs.google.com/document/d/doc_mock_123/edit",
+        "title": "In-Scope Scoping Deliverables",
+      }
+    )
     dag = ScopingDeliverablesWorkflowGraph(
       research_tool=research_tool,
       planner_agent=mock_planner,
+      drive_tool=mock_drive_tool,
     )
 
     initial_state = ScopingWorkflowState(
@@ -156,9 +166,19 @@ class TestThreeTierArchitecture(unittest.IsolatedAsyncioTestCase):
       {"snippet": "Grounded context"}
     ]
     research_tool = ResearchAgentTool(rag_service=mock_rag)
+    mock_drive_tool = MagicMock(spec=GoogleDriveExportTool)
+    mock_drive_tool.export_matrix_to_doc = AsyncMock(
+      return_value={
+        "document_url": "https://docs.google.com/document/d/doc_mock_123/edit",
+        "document_id": "doc_mock_123",
+        "drive_url": "https://docs.google.com/document/d/doc_mock_123/edit",
+        "title": "In-Scope Scoping Deliverables",
+      }
+    )
     mock_dag = ScopingDeliverablesWorkflowGraph(
       research_tool=research_tool,
       planner_agent=mock_planner,
+      drive_tool=mock_drive_tool,
     )
     specialist = ScopingSpecialistSubAgent(workflow_graph=mock_dag)
 
@@ -195,9 +215,19 @@ class TestThreeTierArchitecture(unittest.IsolatedAsyncioTestCase):
       {"snippet": "Grounded context"}
     ]
     research_tool = ResearchAgentTool(rag_service=mock_rag)
+    mock_drive_tool = MagicMock(spec=GoogleDriveExportTool)
+    mock_drive_tool.export_matrix_to_doc = AsyncMock(
+      return_value={
+        "document_url": "https://docs.google.com/document/d/doc_mock_123/edit",
+        "document_id": "doc_mock_123",
+        "drive_url": "https://docs.google.com/document/d/doc_mock_123/edit",
+        "title": "In-Scope Scoping Deliverables",
+      }
+    )
     mock_dag = ScopingDeliverablesWorkflowGraph(
       research_tool=research_tool,
       planner_agent=mock_planner,
+      drive_tool=mock_drive_tool,
     )
     specialist = ScopingSpecialistSubAgent(workflow_graph=mock_dag)
 

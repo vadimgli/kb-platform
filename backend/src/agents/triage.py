@@ -83,19 +83,10 @@ class PrimaryTriageAgent(LlmAgent):
       self._record_turns(session_state, turn_req, response)
       return response
 
-    # 3. Fallback general triage response
-    fallback_reply = (
-      "Hello! I am ArtifactForge. I can help you synthesize and refine "
-      "project deliverables, such as the In-Scope Responsibilities Matrix."
+    # 3. If specialist not found, raise typed error
+    raise SpecialistExecutionError(
+      ErrorMessages.ERR_SPECIALIST_NOT_FOUND.format(specialist_name=target_specialist_name)
     )
-    fallback_resp = ChatTurnResponse(
-      session_id=session_state.session_id,
-      client_id=session_state.client_id,
-      active_agent="triage_agent",
-      reply=fallback_reply,
-    )
-    self._record_turns(session_state, turn_req, fallback_resp)
-    return fallback_resp
 
   def _record_turns(
     self,

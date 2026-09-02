@@ -138,15 +138,14 @@ class VertexRAGService:
       return results
 
     except Exception as err:
-      logger.warning("Vertex AI Search error (%s); using fallback.", err)
-      return [
-        {
-          "title": config.default_doc_title,
-          "snippet": "Grounded GCP documentation context.",
-          "gcs_uri": "",
-          "link": config.default_k8s_docs_url,
-        }
-      ]
+      logger.error("Vertex AI Search query failure on DataStore '%s': %s", self.data_store_id, err)
+      raise RAGRetrievalError(
+        ErrorMessages.ERR_RAG_UNEXPECTED_FAILURE.format(
+          data_store_id=self.data_store_id,
+          error=str(err),
+        ),
+        details={"data_store_id": self.data_store_id, "query": query, "error": str(err)},
+      ) from err
 
   # Backward compatibility alias
   search_k8s_documentation = search_documentation

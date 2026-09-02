@@ -55,12 +55,6 @@ class ResearchAgentTool:
         if body:
           findings.append(f"Drive [{f.get('name', 'doc')}]: {body}")
     except Exception as err:
-      logger.warning("Drive research fallback note: %s", err)
-
-    if not findings:
-      findings.append(
-        "Standard Engagement Scope: ML Evals, Pipeline Optimization, "
-        "Productization in Vertex AI, Enablement & Handover."
-      )
-
+      logger.warning("Drive research note: %s", err)
     return findings
+

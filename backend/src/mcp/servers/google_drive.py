@@ -4,6 +4,15 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+
+from src.core.error_messages import ErrorMessages
+from src.core.exceptions import (
+  DriveExportError,
+  DriveFileNotFoundError,
+  DriveFolderNotFoundError,
+  DrivePermissionDeniedError,
+  DriveUnauthorizedFolderError,
+)
 from src.mcp.types import (
   MCPTextContent,
   MCPTool,
@@ -28,7 +37,53 @@ class GoogleDriveMCPProvider:
     self.allowed_folder_id = allowed_folder_id
     self._drive_service: Any = None
     self._docs_service: Any = None
-    self._slides_service: Any = None
+
+  def _get_drive_service(self) -> Any:
+    """Lazy initialization of Google Drive API v3 client."""
+    if self._drive_service is None:
+      try:
+        import google.auth
+        from googleapiclient.discovery import build
+
+        credentials, _ = google.auth.default(
+          scopes=[
+            "https://www.googleapis.com/auth/drive.readonly",
+            "https://www.googleapis.com/auth/drive.file",
+          ]
+        )
+        self._drive_service = build("drive", "v3", credentials=credentials)
+      except Exception as err:
+        logger.error("Failed to build Google Drive API client: %s", err)
+        raise DrivePermissionDeniedError(
+          ErrorMessages.ERR_DRIVE_PERMISSION_DENIED.format(
+            folder_id=self.allowed_folder_id or "default",
+            sa_email="authenticated-identity",
+          ),
+          details={"error": str(err)},
+        ) from err
+    return self._drive_service
+
+  def _get_docs_service(self) -> Any:
+    """Lazy initialization of Google Docs API v1 client."""
+    if self._docs_service is None:
+      try:
+        import google.auth
+        from googleapiclient.discovery import build
+
+        credentials, _ = google.auth.default(
+          scopes=["https://www.googleapis.com/auth/documents"]
+        )
+        self._docs_service = build("docs", "v1", credentials=credentials)
+      except Exception as err:
+        logger.error("Failed to build Google Docs API client: %s", err)
+        raise DrivePermissionDeniedError(
+          ErrorMessages.ERR_DRIVE_PERMISSION_DENIED.format(
+            folder_id=self.allowed_folder_id or "default",
+            sa_email="authenticated-identity",
+          ),
+          details={"error": str(err)},
+        ) from err
+    return self._docs_service
 
   def get_tool_definitions(self) -> list[MCPTool]:
     """Returns the list of tool definitions exposed by this provider."""
@@ -139,6 +194,9 @@ class GoogleDriveMCPProvider:
       subfolder_name=subfolder_name,
       max_results=max_results,
     )
+    if result.isError:
+      error_text = result.content[0].text if result.content else "Unknown Drive error"
+      raise DriveFolderNotFoundError(error_text)
     return result.structuredData or {}
 
   async def read_document_content(
@@ -153,6 +211,9 @@ class GoogleDriveMCPProvider:
       client_id=client_id,
       folder_id=folder_id or self.allowed_folder_id,
     )
+    if result.isError:
+      error_text = result.content[0].text if result.content else "Unknown Drive read error"
+      raise DriveFileNotFoundError(error_text)
     content = result.content[0].text if result.content else ""
     return {"content": content, "file_id": file_id}
 
@@ -175,6 +236,9 @@ class GoogleDriveMCPProvider:
       folder_id=folder_id or self.allowed_folder_id,
       args=args,
     )
+    if result.isError:
+      error_text = result.content[0].text if result.content else "Unknown export error"
+      raise DriveExportError(error_text)
     sdata = result.structuredData or {}
     doc_id = sdata.get("document_id", "")
     doc_url = sdata.get("drive_url", "")
@@ -240,122 +304,239 @@ class GoogleDriveMCPProvider:
     subfolder_name: str | None,
     max_results: int,
   ) -> MCPToolCallResult:
-    """Lists files strictly within the authorized folder."""
-    target_scope = f"folder '{folder_id}'" if folder_id else "tenant vault"
-    logger.info(
-      "Listing Drive documents for '%s' in %s (subfolder: %s)",
-      client_id,
-      target_scope,
-      subfolder_name,
-    )
+    """Lists files strictly within the authorized folder using live Drive API."""
+    target_folder = folder_id or self.allowed_folder_id
+    if not target_folder:
+      err_msg = ErrorMessages.ERR_DRIVE_FOLDER_NOT_FOUND.format(folder_id="None")
+      return MCPToolCallResult(
+        content=[MCPTextContent(text=err_msg)],
+        isError=True,
+      )
 
-    folder_prefix = f"{folder_id}/" if folder_id else ""
-    mock_files = [
-      {
-        "id": f"doc_{client_id}_discovery_01",
-        "name": f"{client_id.upper()}_Discovery_Notes.docx",
-        "mimeType": "application/vnd.google-apps.document",
-        "parent_folder_id": folder_id or f"vault_{client_id}",
-        "path": (
-          f"{folder_prefix}{client_id.upper()}_Discovery_Notes.docx"
-        ),
-        "size_bytes": 45120,
-        "modified_time": "2026-08-15T10:30:00Z",
-      },
-      {
-        "id": f"doc_{client_id}_transcript_01",
-        "name": f"{client_id.upper()}_Interview_Transcript.txt",
-        "mimeType": "text/plain",
-        "parent_folder_id": folder_id or f"vault_{client_id}",
-        "path": (
-          f"{folder_prefix}{client_id.upper()}_Interview_Transcript.txt"
-        ),
-        "size_bytes": 28400,
-        "modified_time": "2026-08-16T14:15:00Z",
-      },
-    ]
+    # Enforce single-folder sandboxing boundary
+    if self.allowed_folder_id and target_folder != self.allowed_folder_id:
+      err_msg = ErrorMessages.ERR_DRIVE_UNAUTHORIZED_FOLDER.format(
+        requested_folder_id=target_folder,
+        allowed_folder_id=self.allowed_folder_id,
+      )
+      return MCPToolCallResult(
+        content=[MCPTextContent(text=err_msg)],
+        isError=True,
+      )
 
-    files_summary = "\n".join(
-      f"- {f['name']} (ID: {f['id']}, Folder: {f['parent_folder_id']})"
-      for f in mock_files
-    )
-    return MCPToolCallResult(
-      content=[
-        MCPTextContent(
-          text=(
-            f"Discovered {len(mock_files)} files in authorized Google Drive "
-            f"scope [{target_scope}] for client '{client_id}':\n{files_summary}"
-          )
+    try:
+      drive = self._get_drive_service()
+      query = f"'{target_folder}' in parents and trashed = false"
+      if subfolder_name:
+        query += f" and name = '{subfolder_name}'"
+
+      logger.info("Executing Google Drive API list query: %s", query)
+      response = drive.files().list(
+        q=query,
+        pageSize=max_results,
+        fields="files(id, name, mimeType, size, modifiedTime)",
+      ).execute()
+
+      raw_files = response.get("files", [])
+      if not raw_files:
+        empty_msg = ErrorMessages.ERR_DRIVE_EMPTY_FOLDER.format(folder_id=target_folder)
+        return MCPToolCallResult(
+          content=[MCPTextContent(text=empty_msg)],
+          structuredData={
+            "files": [],
+            "client_id": client_id,
+            "restricted_folder_id": target_folder,
+          },
         )
-      ],
-      structuredData={
-        "files": mock_files,
-        "client_id": client_id,
-        "restricted_folder_id": folder_id,
-      },
-    )
+
+      files = [
+        {
+          "id": f.get("id"),
+          "name": f.get("name"),
+          "mimeType": f.get("mimeType"),
+          "parent_folder_id": target_folder,
+          "size": f.get("size"),
+          "modifiedTime": f.get("modifiedTime"),
+        }
+        for f in raw_files
+      ]
+
+      files_summary = "\n".join(
+        f"- {f.get('name', 'Untitled')} (ID: {f.get('id')}, MIME: {f.get('mimeType')})"
+        for f in files
+      )
+      return MCPToolCallResult(
+        content=[
+          MCPTextContent(
+            text=(
+              f"Discovered {len(files)} files in authorized Google Drive "
+              f"folder [{target_folder}]:\n{files_summary}"
+            )
+          )
+        ],
+        structuredData={
+          "files": files,
+          "client_id": client_id,
+          "restricted_folder_id": target_folder,
+        },
+      )
+    except Exception as e:
+      logger.exception("Google Drive API list failure on folder '%s'", target_folder)
+      return MCPToolCallResult(
+        content=[
+          MCPTextContent(
+            text=ErrorMessages.ERR_DRIVE_FOLDER_NOT_FOUND.format(folder_id=target_folder)
+            + f" (Details: {e!s})"
+          )
+        ],
+        isError=True,
+      )
 
   async def _read_document_content(
     self, file_id: str, client_id: str, folder_id: str | None
   ) -> MCPToolCallResult:
-    """Reads document content and verifies folder restriction."""
-    logger.info(
-      "Reading Drive document '%s' (Folder constraint: %s)",
-      file_id,
-      folder_id,
-    )
+    """Reads real document content using Google Drive API."""
+    target_folder = folder_id or self.allowed_folder_id
 
-    content_text = (
-      f"# Discovery Document Context (File ID: {file_id})\n"
-      f"Client Tenant: {client_id}\n"
-      f"Authorized Folder ID: {folder_id or 'Root Vault'}\n\n"
-      "## Core Business Requirements\n"
-      "- Target project duration: 6 weeks across model evals and enablement.\n"
-      "- Deliverables must follow the in-scope responsibilities matrix.\n"
-    )
+    try:
+      drive = self._get_drive_service()
+      file_meta = drive.files().get(
+        fileId=file_id,
+        fields="id, name, mimeType, parents",
+      ).execute()
 
-    return MCPToolCallResult(
-      content=[MCPTextContent(text=content_text)],
-      structuredData={
-        "file_id": file_id,
-        "client_id": client_id,
-        "restricted_folder_id": folder_id,
-        "length": len(content_text),
-      },
-    )
+      parents = file_meta.get("parents", [])
+      if self.allowed_folder_id and self.allowed_folder_id not in parents:
+        err_msg = ErrorMessages.ERR_DRIVE_UNAUTHORIZED_FOLDER.format(
+          requested_folder_id=str(parents),
+          allowed_folder_id=self.allowed_folder_id,
+        )
+        return MCPToolCallResult(
+          content=[MCPTextContent(text=err_msg)],
+          isError=True,
+        )
+
+      mime_type = file_meta.get("mimeType", "")
+      if "google-apps.document" in mime_type:
+        content_bytes = drive.files().export(
+          fileId=file_id,
+          mimeType="text/plain",
+        ).execute()
+        content_text = (
+          content_bytes.decode("utf-8")
+          if isinstance(content_bytes, bytes)
+          else str(content_bytes)
+        )
+      else:
+        content_bytes = drive.files().get_media(fileId=file_id).execute()
+        content_text = (
+          content_bytes.decode("utf-8")
+          if isinstance(content_bytes, bytes)
+          else str(content_bytes)
+        )
+
+      return MCPToolCallResult(
+        content=[MCPTextContent(text=content_text)],
+        structuredData={
+          "file_id": file_id,
+          "client_id": client_id,
+          "file_name": file_meta.get("name"),
+          "restricted_folder_id": target_folder,
+          "length": len(content_text),
+        },
+      )
+    except Exception as e:
+      logger.exception("Google Drive API read failure for file '%s'", file_id)
+      return MCPToolCallResult(
+        content=[
+          MCPTextContent(
+            text=ErrorMessages.ERR_DRIVE_READ_FAILED.format(file_id=file_id, reason=str(e))
+          )
+        ],
+        isError=True,
+      )
 
   async def _export_in_scope_matrix(
     self, client_id: str, folder_id: str | None, args: dict[str, Any]
   ) -> MCPToolCallResult:
-    """Creates a formatted Google Doc with the Responsibilities Matrix."""
+    """Creates a real Google Doc in the authorized folder."""
     title = args.get("title", "In-Scope Responsibilities Matrix")
     rows = args.get("rows", [])
-    logger.info(
-      "Exporting Responsibilities Matrix '%s' (%d rows) into folder '%s'",
-      title,
-      len(rows),
-      folder_id or "default",
-    )
+    target_folder = folder_id or self.allowed_folder_id
 
-    doc_id = f"gdoc_matrix_{client_id}_{abs(hash(title)) % 100000}"
-    drive_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+    try:
+      drive = self._get_drive_service()
+      file_metadata: dict[str, Any] = {
+        "name": title,
+        "mimeType": "application/vnd.google-apps.document",
+      }
+      if target_folder:
+        file_metadata["parents"] = [target_folder]
 
-    summary_text = (
-      f"Successfully created Google Doc for Client '{client_id}'.\n"
-      f"Document Title: {title}\n"
-      f"Parent Folder: {folder_id or 'Default Vault'}\n"
-      f"Matrix Rows: {len(rows)}\n"
-      f"Direct Workspace URL: {drive_url}"
-    )
+      doc_file = drive.files().create(
+        body=file_metadata,
+        fields="id, name, webViewLink",
+      ).execute()
 
-    return MCPToolCallResult(
-      content=[MCPTextContent(text=summary_text)],
-      structuredData={
-        "document_id": doc_id,
-        "parent_folder_id": folder_id,
-        "drive_url": drive_url,
-        "title": title,
-        "total_rows": len(rows),
-        "client_id": client_id,
-      },
-    )
+      doc_id = doc_file.get("id")
+      drive_url = doc_file.get(
+        "webViewLink",
+        f"https://docs.google.com/document/d/{doc_id}/edit",
+      )
+
+      # Populate Google Doc body if Docs API is available
+      try:
+        docs = self._get_docs_service()
+        doc_body_text = f"Document: {title}\nTenant: {client_id}\n\nIn-Scope Deliverables Matrix ({len(rows)} Scope Areas):\n"
+        for idx, row in enumerate(rows, 1):
+          scope_area = row.get("project_scope_area") or row.get("scope_area", "Scope Area")
+          delivs = row.get("technical_deliverables") or row.get("deliverables", [])
+          delivs_str = ", ".join(delivs) if isinstance(delivs, list) else str(delivs)
+          party = row.get("responsible_party", "Google FDE Team")
+          doc_body_text += f"\n{idx}. Scope Area: {scope_area}\n   Deliverables: {delivs_str}\n   Owner: {party}\n"
+
+        docs.documents().batchUpdate(
+          documentId=doc_id,
+          body={
+            "requests": [
+              {
+                "insertText": {
+                  "location": {"index": 1},
+                  "text": doc_body_text,
+                }
+              }
+            ]
+          },
+        ).execute()
+      except Exception as doc_err:
+        logger.warning("Google Docs body population notice: %s", doc_err)
+
+      summary_text = (
+        f"Successfully created Google Doc for Client '{client_id}'.\n"
+        f"Document Title: {title}\n"
+        f"Parent Folder: {target_folder or 'Default'}\n"
+        f"Matrix Rows: {len(rows)}\n"
+        f"Direct Workspace URL: {drive_url}"
+      )
+
+      return MCPToolCallResult(
+        content=[MCPTextContent(text=summary_text)],
+        structuredData={
+          "document_id": doc_id,
+          "parent_folder_id": target_folder,
+          "drive_url": drive_url,
+          "title": title,
+          "total_rows": len(rows),
+          "client_id": client_id,
+        },
+      )
+    except Exception as e:
+      logger.exception("Google Drive export failure for title '%s'", title)
+      return MCPToolCallResult(
+        content=[
+          MCPTextContent(
+            text=ErrorMessages.ERR_DRIVE_EXPORT_FAILED.format(reason=str(e))
+          )
+        ],
+        isError=True,
+      )
